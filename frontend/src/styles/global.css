@@ -1,0 +1,125 @@
+:root {
+  --color-bg: #f6f7fb;
+  --color-surface: #ffffff;
+  --color-text: #1b2333;
+  --color-muted: #5b6475;
+  --color-border: #dfe3ec;
+  --color-primary: #2f5bd3;
+  --color-success-bg: #e3f5ea;
+  --color-success-text: #17663a;
+  --color-danger-bg: #fde8e8;
+  --color-danger-text: #a12626;
+  --color-neutral-bg: #eceff5;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 1px 3px rgb(16 24 40 / 10%);
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #10141c;
+    --color-surface: #181e2a;
+    --color-text: #e6e9f0;
+    --color-muted: #9aa3b5;
+    --color-border: #2a3242;
+    --color-primary: #7d9cff;
+    --color-success-bg: #133524;
+    --color-success-text: #7fd8a4;
+    --color-danger-bg: #3b1717;
+    --color-danger-text: #f2a3a3;
+    --color-neutral-bg: #232b3a;
+    --shadow: none;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 {
+  margin: 0 0 0.5rem;
+  font-size: clamp(1.5rem, 1.2rem + 1.2vw, 2rem);
+  line-height: 1.2;
+}
+
+code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--color-neutral-bg);
+  font-size: 0.9em;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.container {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.site-header {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.site-header__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 56px;
+}
+
+.brand {
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.status-pill {
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  background: var(--color-neutral-bg);
+  color: var(--color-muted);
+}
+
+.status-pill--online {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+}
+
+.status-pill--offline {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+}
+
+.card {
+  margin: 2rem 0;
+  padding: clamp(1.25rem, 3vw, 2rem);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: var(--shadow);
+}
+
+.muted {
+  color: var(--color-muted);
+}
