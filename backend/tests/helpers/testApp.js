@@ -53,7 +53,14 @@ export function createInMemoryAdmins(
 /** An inquiry service that fails loudly if a test forgets to stub it. */
 export const unstubbedInquiryService = Object.freeze(
   Object.fromEntries(
-    ['createInquiry', 'listInquiries', 'getInquiry', 'updateInquiryStatus'].map((name) => [
+    [
+      'createInquiry',
+      'listInquiries',
+      'getInquiryStats',
+      'exportInquiries',
+      'getInquiry',
+      'updateInquiryStatus',
+    ].map((name) => [
       name,
       async () => {
         throw new Error(`inquiryService.${name} was not stubbed for this test`);

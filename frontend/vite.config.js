@@ -19,12 +19,32 @@ export default defineConfig(({ mode }) => {
       },
     },
     preview: { port: 4173, strictPort: true },
-    build: { sourcemap: true },
+    build: {
+      sourcemap: true,
+      rolldownOptions: {
+        output: {
+          // Libraries change less often than app code, so ship them as
+          // separately cached chunks.
+          codeSplitting: {
+            groups: [
+              {
+                name: 'react',
+                test: /node_modules[\\/](react|react-dom|react-router|scheduler)[\\/]/,
+              },
+              { name: 'forms', test: /node_modules[\\/](react-hook-form|@hookform|zod)[\\/]/ },
+              { name: 'vendor', test: /node_modules[\\/]/ },
+            ],
+          },
+        },
+      },
+    },
     test: {
       environment: 'jsdom',
       include: ['tests/**/*.test.{js,jsx}'],
       setupFiles: ['./tests/setup.js'],
       restoreMocks: true,
+      // Dates in tests render in a fixed zone, whatever the machine's.
+      env: { TZ: 'UTC' },
     },
   };
 });

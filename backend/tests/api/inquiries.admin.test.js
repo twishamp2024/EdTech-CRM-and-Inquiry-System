@@ -1,3 +1,4 @@
+import { ConnectionRefusedError, DatabaseError } from 'sequelize';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 import { ADMIN_ROLE } from '../../src/constants/auth.js';
@@ -28,6 +29,8 @@ function setup() {
     }),
     getInquiry: vi.fn().mockResolvedValue(record),
     updateInquiryStatus: vi.fn().mockResolvedValue({ ...record, status: 'Resolved' }),
+    getInquiryStats: vi.fn().mockResolvedValue({ total: 1, byStatus: {}, byCategory: {} }),
+    exportInquiries: vi.fn().mockResolvedValue([]),
   };
   const kit = buildTestAppWithKit({ services: { inquiryService } });
   const token = kit.kit.tokenService.issue(TEST_ADMIN.id).token;
@@ -36,6 +39,8 @@ function setup() {
 
 const PROTECTED = [
   ['GET', `/api/inquiries`],
+  ['GET', `/api/inquiries/stats`],
+  ['GET', `/api/inquiries/export`],
   ['GET', `/api/inquiries/${ID}`],
   ['PATCH', `/api/inquiries/${ID}/status`],
 ];
@@ -72,6 +77,8 @@ describe('unauthorized access to inquiry records', () => {
         expect(ctx.inquiryService.listInquiries).not.toHaveBeenCalled();
         expect(ctx.inquiryService.getInquiry).not.toHaveBeenCalled();
         expect(ctx.inquiryService.updateInquiryStatus).not.toHaveBeenCalled();
+        expect(ctx.inquiryService.getInquiryStats).not.toHaveBeenCalled();
+        expect(ctx.inquiryService.exportInquiries).not.toHaveBeenCalled();
       });
     }
   }
@@ -107,7 +114,12 @@ describe('authorized access to inquiry records', () => {
       data: [record],
       meta: { page: 1, pageSize: 20, total: 1, totalPages: 1 },
     });
-    expect(inquiryService.listInquiries).toHaveBeenCalledWith({ page: 2, pageSize: 10 });
+    expect(inquiryService.listInquiries).toHaveBeenCalledWith({
+      page: 2,
+      pageSize: 10,
+      sortBy: 'createdAt',
+      sortDir: 'desc',
+    });
     expect(res.headers['cache-control']).toBe('no-store');
   });
 
@@ -168,6 +180,87 @@ describe('authorized access to inquiry records', () => {
       .send(body);
     expect(res.status).toBe(400);
     expect(res.body.error.details.map((d) => d.field)).toContain(field);
+  });
+
+  it('passes validated filters, search and sort to the service', async () => {
+    const { app, token, inquiryService } = setup();
+    const res = await call(
+      app,
+      'GET',
+      '/api/inquiries?category=Concert&userType=School&search=%20ravi%20%20kumar%20&sortBy=name&sortDir=asc&page=3',
+      token,
+    );
+    expect(res.status).toBe(200);
+    expect(inquiryService.listInquiries).toHaveBeenCalledWith({
+      page: 3,
+      pageSize: 20,
+      category: 'Concert',
+      userType: 'School',
+      search: 'ravi kumar',
+      sortBy: 'name',
+      sortDir: 'asc',
+    });
+  });
+
+  it('answers 503 without details when the database is down while listing', async () => {
+    const { app, token, inquiryService } = setup();
+    inquiryService.listInquiries.mockRejectedValue(
+      new ConnectionRefusedError(new Error('connect ECONNREFUSED 10.1.2.3:5432')),
+    );
+    const res = await call(app, 'GET', '/api/inquiries', token);
+    expect(res.status).toBe(503);
+    expect(res.body.error.code).toBe('DATABASE_UNAVAILABLE');
+    expect(JSON.stringify(res.body)).not.toContain('10.1.2.3');
+  });
+
+  it('reports a database error during a status update without leaking it', async () => {
+    const { app, token, inquiryService } = setup();
+    inquiryService.updateInquiryStatus.mockRejectedValue(
+      new DatabaseError(Object.assign(new Error('deadlock detected'), { code: '40P01' })),
+    );
+    const res = await call(app, 'PATCH', `/api/inquiries/${ID}/status`, token);
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({
+      success: false,
+      error: {
+        code: 'DATABASE_UNAVAILABLE',
+        message: 'The service is temporarily unavailable. Please try again shortly.',
+      },
+    });
+  });
+
+  it('reports other database errors during a status update as a generic 500', async () => {
+    const { app, token, inquiryService } = setup();
+    inquiryService.updateInquiryStatus.mockRejectedValue(
+      new DatabaseError(Object.assign(new Error('relation does not exist'), { code: '42P01' })),
+    );
+    const res = await call(app, 'PATCH', `/api/inquiries/${ID}/status`, token);
+    expect(res.status).toBe(500);
+    expect(res.body.error.code).toBe('DATABASE_ERROR');
+    expect(JSON.stringify(res.body)).not.toContain('relation');
+  });
+
+  it('passes the export filters (and only those) to the service', async () => {
+    const { app, token, inquiryService } = setup();
+    const res = await call(app, 'GET', '/api/inquiries/export?category=Concert&search=ravi', token);
+    expect(res.status).toBe(200);
+    expect(inquiryService.exportInquiries).toHaveBeenCalledWith({
+      category: 'Concert',
+      search: 'ravi',
+      sortBy: 'createdAt',
+      sortDir: 'desc',
+    });
+  });
+
+  it('explains when an export is too large', async () => {
+    const { app, token, inquiryService } = setup();
+    const { AppError } = await import('../../src/utils/AppError.js');
+    inquiryService.exportInquiries.mockRejectedValue(
+      new AppError(422, 'EXPORT_TOO_LARGE', 'Narrow the filters and try again.'),
+    );
+    const res = await call(app, 'GET', '/api/inquiries/export', token);
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('EXPORT_TOO_LARGE');
   });
 
   it('rejects a status update without a trusted origin (CSRF)', async () => {

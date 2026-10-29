@@ -5,7 +5,7 @@
   "description": "React + Vite SPA for the EdTech CRM & Inquiry Management System",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.22.0 || >=24"
   },
   "scripts": {
     "dev": "vite",
@@ -18,8 +18,14 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@hookform/resolvers": "^6.0.2",
+    "axios": "^1.21.0",
+    "lucide-react": "^1.64.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "react-hook-form": "^7.91.0",
+    "react-router": "^8.5.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

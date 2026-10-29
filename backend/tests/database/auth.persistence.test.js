@@ -257,7 +257,7 @@ describe('session flow against PostgreSQL', () => {
 
     const list = await agent.get('/api/inquiries');
     expect(list.status).toBe(200);
-    expect(list.body.meta).toEqual({ page: 1, pageSize: 20, total: 1, totalPages: 1 });
+    expect(list.body.meta).toMatchObject({ page: 1, pageSize: 20, total: 1, totalPages: 1 });
     expect(list.body.data[0]).toMatchObject({ id: inquiryId, status: 'New', userType: 'Student' });
 
     const updated = await agent

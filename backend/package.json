@@ -19,7 +19,8 @@
     "format:check": "prettier --check .",
     "db:migrate": "node scripts/db-migrate.js",
     "db:check": "node scripts/db-check.js",
-    "admin:create": "node scripts/createAdmin.js"
+    "admin:create": "node scripts/createAdmin.js",
+    "dev:memory": "node scripts/dev-memory.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

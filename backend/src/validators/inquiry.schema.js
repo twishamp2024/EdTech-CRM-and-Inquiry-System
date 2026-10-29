@@ -107,20 +107,78 @@ export const createInquirySchema = z.strictObject(
 );
 
 export const INQUIRY_PAGE_SIZE_MAX = 100;
+export const INQUIRY_PAGE_SIZE_DEFAULT = 20;
+export const INQUIRY_SEARCH_MAX_LENGTH = 100;
+
+// Columns the list may be sorted by (attribute names; never raw input).
+export const INQUIRY_SORT_FIELDS = Object.freeze([
+  'createdAt',
+  'name',
+  'category',
+  'userType',
+  'status',
+]);
+export const SORT_DIRECTIONS = Object.freeze(['asc', 'desc']);
 
 const positiveInt = (label, { max, fallback }) =>
-  z.coerce
-    .number({ error: `${label} must be a whole number` })
-    .int({ error: `${label} must be a whole number` })
-    .min(1, { error: `${label} must be at least 1` })
-    .max(max, { error: `${label} must be at most ${max}` })
-    .default(fallback);
+  z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.coerce
+      .number({ error: `${label} must be a whole number` })
+      .int({ error: `${label} must be a whole number` })
+      .min(1, { error: `${label} must be at least 1` })
+      .max(max, { error: `${label} must be at most ${max}` })
+      .default(fallback),
+  );
 
-/** GET /api/inquiries query string (filters and search are added with the dashboard). */
+/** Optional filter: blank means "no filter"; otherwise must be an allowed value. */
+const optionalChoice = (label, values) =>
+  z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim() || undefined : value),
+    z.enum(values, { error: `${label} must be one of: ${values.join(', ')}` }).optional(),
+  );
+
+/**
+ * GET /api/inquiries query string. Repeated parameters (?category=a&category=b)
+ * arrive as arrays and are rejected; unknown parameters are rejected.
+ */
 export const listInquiriesQuerySchema = z.strictObject({
   page: positiveInt('page', { max: 100_000, fallback: 1 }),
-  pageSize: positiveInt('pageSize', { max: INQUIRY_PAGE_SIZE_MAX, fallback: 20 }),
+  pageSize: positiveInt('pageSize', {
+    max: INQUIRY_PAGE_SIZE_MAX,
+    fallback: INQUIRY_PAGE_SIZE_DEFAULT,
+  }),
+  category: optionalChoice('category', CATEGORIES),
+  userType: optionalChoice('userType', USER_TYPES),
+  status: optionalChoice('status', INQUIRY_STATUSES),
+  search: z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') || undefined : value),
+    z
+      .string({ error: 'search must be text' })
+      .max(INQUIRY_SEARCH_MAX_LENGTH, {
+        error: `search must be at most ${INQUIRY_SEARCH_MAX_LENGTH} characters`,
+      })
+      .refine((value) => !CONTROL_CHARACTERS.test(value), {
+        error: 'search contains characters that are not allowed',
+      })
+      .optional(),
+  ),
+  sortBy: z
+    .enum(INQUIRY_SORT_FIELDS, {
+      error: `sortBy must be one of: ${INQUIRY_SORT_FIELDS.join(', ')}`,
+    })
+    .default('createdAt'),
+  sortDir: z.enum(SORT_DIRECTIONS, { error: 'sortDir must be asc or desc' }).default('desc'),
 });
+
+/** GET /api/inquiries/export: the list filters and sort, without pagination. */
+export const exportInquiriesQuerySchema = listInquiriesQuerySchema.omit({
+  page: true,
+  pageSize: true,
+});
+
+/** GET /api/inquiries/stats takes no parameters. */
+export const emptyQuerySchema = z.strictObject({});
 
 /** PATCH /api/inquiries/:id/status body. */
 export const updateInquiryStatusSchema = z.strictObject(

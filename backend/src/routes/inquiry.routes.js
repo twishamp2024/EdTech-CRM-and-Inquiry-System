@@ -8,6 +8,8 @@ import { validate } from '../middleware/validate.js';
 import { uuidParamSchema } from '../validators/common.schema.js';
 import {
   createInquirySchema,
+  emptyQuerySchema,
+  exportInquiriesQuerySchema,
   listInquiriesQuerySchema,
   updateInquiryStatusSchema,
 } from '../validators/inquiry.schema.js';
@@ -30,6 +32,9 @@ export function createInquiryRouter({ inquiryService, config, security }) {
   router.use(security.authenticate, requireRole(ADMIN_ROLE));
 
   router.get('/', validate({ query: listInquiriesQuerySchema }), controller.list);
+  // Fixed paths before /:id, which only accepts UUIDs.
+  router.get('/stats', validate({ query: emptyQuerySchema }), controller.stats);
+  router.get('/export', validate({ query: exportInquiriesQuerySchema }), controller.exportCsv);
   router.get('/:id', validate({ params: uuidParamSchema }), controller.show);
   router.patch(
     '/:id/status',

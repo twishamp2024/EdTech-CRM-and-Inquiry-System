@@ -1,3 +1,5 @@
+import { exportFilename, inquiriesToCsv } from '../utils/inquiryCsv.js';
+
 export const INQUIRY_CREATED_MESSAGE = 'Thank you! Your inquiry has been received.';
 export const INQUIRY_DUPLICATE_MESSAGE =
   'We have already received this inquiry. Our team will get back to you soon.';
@@ -19,6 +21,25 @@ export function createInquiryController({ inquiryService }) {
     async list(req, res) {
       const { inquiries, meta } = await inquiryService.listInquiries(req.validated.query);
       res.set('Cache-Control', 'no-store').json({ success: true, data: inquiries, meta });
+    },
+
+    /** GET /api/inquiries/stats (admin): totals by status and by category. */
+    async stats(_req, res) {
+      const stats = await inquiryService.getInquiryStats();
+      res.set('Cache-Control', 'no-store').json({ success: true, data: stats });
+    },
+
+    /** GET /api/inquiries/export (admin): the filtered list as a CSV download. */
+    async exportCsv(req, res) {
+      const rows = await inquiryService.exportInquiries(req.validated.query);
+      res
+        .set({
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${exportFilename()}"`,
+          'Cache-Control': 'no-store',
+          'X-Export-Row-Count': String(rows.length),
+        })
+        .send(inquiriesToCsv(rows));
     },
 
     /** GET /api/inquiries/:id (admin) */

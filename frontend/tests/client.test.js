@@ -1,126 +1,148 @@
+import { AxiosError } from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiRequest, buildUrl } from '../src/api/client.js';
+import {
+  ApiError,
+  apiClient,
+  createApiClient,
+  setUnauthorizedListener,
+} from '../src/api/client.js';
+import { submitInquiry } from '../src/api/inquiries.api.js';
 
-function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
+/** Axios adapter that answers like the network would. */
+function respond(status, data, headers = {}) {
+  return vi.fn(async (config) => {
+    const response = { data, status, statusText: String(status), headers, config, request: {} };
+    if (status >= 200 && status < 300) return response;
+    throw new AxiosError(
+      `Request failed with status code ${status}`,
+      'ERR_BAD_RESPONSE',
+      config,
+      {},
+      response,
+    );
   });
 }
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
-
-describe('buildUrl', () => {
-  it('defaults to the same-origin /api prefix used by the Vite proxy', () => {
-    expect(buildUrl('/health')).toBe('/api/health');
-    expect(buildUrl('health')).toBe('/api/health');
+const fail = (code) =>
+  vi.fn(async (config) => {
+    throw new AxiosError('failed', code, config, {});
   });
 
-  it('supports an absolute API base URL', () => {
-    expect(buildUrl('/health', 'https://api.example.com/api')).toBe(
-      'https://api.example.com/api/health',
-    );
-  });
-});
+afterEach(() => setUnauthorizedListener(null));
 
-describe('apiRequest', () => {
-  it('sends JSON and returns the parsed response', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }, 201));
-    vi.stubGlobal('fetch', fetchMock);
+describe('createApiClient', () => {
+  it('targets the configured base URL and always sends credentials (HttpOnly cookie)', async () => {
+    const adapter = respond(200, { ok: true });
+    const client = createApiClient({ adapter });
+    const res = await client.get('/inquiries');
 
-    await expect(apiRequest('/things', { method: 'POST', body: { a: 1 } })).resolves.toEqual({
-      ok: true,
-    });
-
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('/api/things');
-    expect(init.method).toBe('POST');
-    expect(init.body).toBe('{"a":1}');
-    expect(init.headers).toMatchObject({
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    });
-    expect(init.headers.Authorization).toBeUndefined();
-  });
-
-  it('sends cookies so the HttpOnly admin session reaches the API', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await apiRequest('/auth/me');
-    expect(fetchMock.mock.calls[0][1].credentials).toBe('include');
+    const config = adapter.mock.calls[0][0];
+    expect(config.baseURL).toBe('/api');
+    expect(config.url).toBe('/inquiries');
+    expect(config.withCredentials).toBe(true);
+    expect(config.headers.Accept).toBe('application/json');
+    expect(config.headers.Authorization).toBeUndefined();
+    expect(res.data).toEqual({ ok: true });
   });
 
   it('turns the backend error envelope into an ApiError', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        jsonResponse(
-          {
-            error: {
-              code: 'VALIDATION_ERROR',
-              message: 'Request validation failed',
-              details: [{ path: 'email' }],
-            },
-          },
-          400,
-        ),
+    const client = createApiClient({
+      adapter: respond(
+        429,
+        {
+          success: false,
+          error: { code: 'RATE_LIMITED', message: 'Slow down', details: [{ message: 'x' }] },
+        },
+        { 'retry-after': '120' },
       ),
-    );
+    });
+    const error = await client.post('/inquiries', {}).catch((err) => err);
 
-    const error = await apiRequest('/things').catch((err) => err);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      message: 'Request validation failed',
-      details: [{ path: 'email' }],
+      status: 429,
+      code: 'RATE_LIMITED',
+      message: 'Slow down',
+      details: [{ message: 'x' }],
+      retryAfterSeconds: 120,
     });
   });
 
-  it('handles non-JSON error responses', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Bad Gateway', { status: 502 })));
-    await expect(apiRequest('/things')).rejects.toMatchObject({ status: 502, code: 'HTTP_ERROR' });
-  });
-
-  it('reports network failures as NETWORK_ERROR', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
-    await expect(apiRequest('/things')).rejects.toMatchObject({ code: 'NETWORK_ERROR', status: 0 });
-  });
-
-  it('times out slow requests', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        (_url, { signal }) =>
-          new Promise((_resolve, reject) => {
-            signal.addEventListener('abort', () =>
-              reject(new DOMException('Aborted', 'AbortError')),
-            );
-          }),
+  it('reads the error envelope from text responses (e.g. a failed CSV export)', async () => {
+    const client = createApiClient({
+      adapter: respond(
+        422,
+        JSON.stringify({
+          success: false,
+          error: { code: 'EXPORT_TOO_LARGE', message: 'Too many' },
+        }),
       ),
-    );
-    await expect(apiRequest('/slow', { timeoutMs: 10 })).rejects.toMatchObject({ code: 'TIMEOUT' });
+    });
+    await expect(client.get('/inquiries/export', { responseType: 'text' })).rejects.toMatchObject({
+      status: 422,
+      code: 'EXPORT_TOO_LARGE',
+      message: 'Too many',
+    });
   });
 
-  it('propagates caller cancellation as an AbortError', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        (_url, { signal }) =>
-          new Promise((_resolve, reject) => {
-            signal.addEventListener('abort', () =>
-              reject(new DOMException('Aborted', 'AbortError')),
-            );
-          }),
-      ),
+  it('handles error responses without an envelope', async () => {
+    const client = createApiClient({ adapter: respond(502, '<html>Bad gateway</html>') });
+    await expect(client.get('/x')).rejects.toMatchObject({ status: 502, code: 'HTTP_ERROR' });
+  });
+
+  it('reports network failures and timeouts in plain language', async () => {
+    await expect(createApiClient({ adapter: fail('ERR_NETWORK') }).get('/x')).rejects.toMatchObject(
+      {
+        code: 'NETWORK_ERROR',
+        status: 0,
+        message: expect.stringContaining('could not reach the server'),
+      },
     );
+    await expect(
+      createApiClient({ adapter: fail('ECONNABORTED') }).get('/x'),
+    ).rejects.toMatchObject({
+      code: 'TIMEOUT',
+    });
+  });
+
+  it('lets cancellations through untouched', async () => {
     const controller = new AbortController();
-    const pending = apiRequest('/slow', { signal: controller.signal });
     controller.abort();
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    const error = await createApiClient({ adapter: respond(200, {}) })
+      .get('/x', { signal: controller.signal })
+      .catch((err) => err);
+    expect(error.name).toBe('CanceledError');
   });
+
+  it('notifies the session listener on 401, unless the request opts out', async () => {
+    const listener = vi.fn();
+    setUnauthorizedListener(listener);
+    const client = createApiClient({ adapter: respond(401, { error: { code: 'TOKEN_EXPIRED' } }) });
+
+    await client.get('/inquiries').catch(() => {});
+    expect(listener).toHaveBeenCalledTimes(1);
+    await client.get('/auth/me', { skipSessionExpiry: true }).catch(() => {});
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('submitInquiry', () => {
+  it('returns the stored id only when the backend confirms', async () => {
+    vi.spyOn(apiClient, 'post').mockResolvedValue({
+      data: { success: true, message: 'ok', data: { id: 'abc-123', duplicate: false } },
+    });
+    await expect(submitInquiry({})).resolves.toEqual({
+      id: 'abc-123',
+      duplicate: false,
+      message: 'ok',
+    });
+  });
+
+  it.each([[{ success: true, data: {} }], [{ success: false, data: { id: 'abc' } }], [{}], ['']])(
+    'rejects an unconfirmed response %j',
+    async (data) => {
+      vi.spyOn(apiClient, 'post').mockResolvedValue({ data });
+      await expect(submitInquiry({})).rejects.toMatchObject({ code: 'UNCONFIRMED' });
+    },
+  );
 });
