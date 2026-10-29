@@ -1,6 +1,6 @@
 # Implementation Plan — EdTech CRM & Inquiry Management System
 
-Status: **Stage 2 (foundation + database layer) complete.** Next: Phase 3 (authentication).
+Status: **Stage 3 (public inquiry submission API) complete.** Next: Phase 3 (authentication), then the admin inquiry endpoints.
 Design details: [ARCHITECTURE.md](ARCHITECTURE.md). Requirement mapping: [REQUIREMENTS_TRACEABILITY.md](REQUIREMENTS_TRACEABILITY.md).
 
 ---
@@ -12,11 +12,23 @@ Design details: [ARCHITECTURE.md](ARCHITECTURE.md). Requirement mapping: [REQUIR
 | 1 | Repository & database schema | **Done** (applying to Supabase blocked on B1) |
 | 2 | Backend foundation | **Done** |
 | 3 | Authentication | Not started |
-| 4 | Inquiry APIs | Not started |
+| 4 | Inquiry APIs | **Public `POST /api/inquiries` done** (4.1 create schema, 4.3 `createInquiry`, 4.4 public route + limiter); admin list/get/status endpoints not started |
 | 5 | Frontend foundation & public form | **Foundation done** (5.1–5.3, 5.6); form not started |
 | 6 | Admin login & dashboard | Not started |
 | 7 | Tests & quality gates | Ongoing: suites exist for everything built so far; CI not set up |
 | 8 | Documentation & deployment | README covers stage 2; deployment not started |
+
+### Stage 3 verification log (2026-10-30)
+
+| Command | Result |
+|---------|--------|
+| `backend: npm run lint` / `format:check` | pass |
+| `backend: npm test` | **12 files: 11 passed, 1 skipped; 232 tests: 227 passed, 5 skipped** (skipped = `tests/integration`, no `TEST_DATABASE_URL`) |
+| New suites | `unit/inquiry.schema.test.js` 58, `api/inquiries.test.js` 32, `database/inquiry.persistence.test.js` 8 (real app + Sequelize + pg → in-process PGlite) |
+| Defect found and fixed | on insert `updated_at` could be 1 ms later than `created_at`; fixed with a `beforeCreate` hook |
+| Live smoke test (server → PGlite over TCP) | 201 + row stored (trimmed, lower-cased email, status `New`, equal timestamps); identical repeat → 200 same id; invalid → 400 with 7 field errors; bad JSON 400; form post 415; 429 with `RateLimit` headers; DB stopped → 503 with a generic body, full error only in the server log |
+
+**Not verified:** persistence and advisory-lock contention on a real Supabase/PostgreSQL server (B1; the integration test is written).
 
 ### Stage 2 verification log (2026-10-30)
 
@@ -130,10 +142,10 @@ Changes from the stage 1 plan, made to match the stage 2 requirements:
 
 | # | Task | Output |
 |---|------|--------|
-| 4.1 | Create, list-query, status-update schemas (reuse `uuidParamSchema`) | `src/validators/inquiry.schema.js` |
+| 4.1 | ~~Create~~ (done), list-query, status-update schemas (reuse `uuidParamSchema`) | `src/validators/inquiry.schema.js` |
 | 4.2 | `buildInquiryWhere` — pure filters + search → `where`; LIKE escaping; digits clause | `src/utils/buildInquiryWhere.js` |
-| 4.3 | `inquiry.service.js` — `create`, `list` (`findAndCountAll`, meta), `getById`, `updateStatus` | `src/services/inquiry.service.js` |
-| 4.4 | Routes: public `POST /` + submit limiter; `GET /`, `GET /:id`, `PATCH /:id/status` behind `authenticate` | controller + routes |
+| 4.3 | `inquiry.service.js` — ~~`createInquiry`~~ (done, with dedupe), `list` (`findAndCountAll`, meta), `getById`, `updateStatus` | `src/services/inquiry.service.js` |
+| 4.4 | Routes: ~~public `POST /` + submit limiter~~ (done); `GET /`, `GET /:id`, `PATCH /:id/status` behind `authenticate` | controller + routes |
 
 **Checkpoint:** public POST stores a `New` inquiry; list requires a token; every filter combination returns the right rows.
 

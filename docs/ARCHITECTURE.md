@@ -1,6 +1,6 @@
 # Architecture — EdTech CRM & Inquiry Management System
 
-Status: **Stage 2 complete — foundation and database layer implemented.** Authentication, inquiry APIs, the public form and the dashboard are still to come.
+Status: **Stage 3 complete — foundation, database layer and the public `POST /api/inquiries` API implemented.** Authentication, the admin inquiry APIs, the public form UI and the dashboard are still to come.
 Sections are marked **[Implemented]** or **[Planned]**.
 Companion docs: [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [REQUIREMENTS_TRACEABILITY.md](REQUIREMENTS_TRACEABILITY.md).
 
@@ -15,8 +15,8 @@ Companion docs: [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [REQUIREMENTS_
 │                          │   <JWT> (admin routes)    │  Zod · bcrypt · jsonwebtoken │                         │  tables: admins,          │
 │  /            form       │ ◀───────────────────────  │                              │ ◀────────────────────── │          inquiries        │
 │  /admin/login            │        JSON responses     │  /api/health  /api/health/db │                         │  RLS enabled, no policies │
-│  /admin       dashboard  │                           │  /api/auth/*  (planned)      │                         │  (blocks PostgREST/anon)  │
-└──────────────────────────┘                           │  /api/inquiries/* (planned)  │                         └───────────────────────────┘
+│  /admin       dashboard  │                           │  POST /api/inquiries (public)│                         │  (blocks PostgREST/anon)  │
+└──────────────────────────┘                           │  /api/auth/*, admin inquiry  │                         └───────────────────────────┘
         ▲ dev: Vite proxies /api → localhost:4000      └──────────────────────────────┘
 ```
 
@@ -45,17 +45,25 @@ Hard boundaries:
 │   │   │   ├── Admin.js
 │   │   │   ├── Inquiry.js
 │   │   │   └── schemaComparison.js      # model ↔ information_schema comparison (db:check + tests)
-│   │   ├── controllers/health.controller.js
+│   │   ├── controllers/
+│   │   │   ├── health.controller.js
+│   │   │   └── inquiry.controller.js    # 201 created / 200 duplicate response
+│   │   ├── services/inquiry.service.js  # createInquiry: field allow-list, dedupe in a locked transaction
 │   │   ├── routes/
 │   │   │   ├── index.js                 # mounted at /api
-│   │   │   └── health.routes.js
+│   │   │   ├── health.routes.js
+│   │   │   └── inquiry.routes.js        # POST / (public): rate limit → requireJson → validate → controller
 │   │   ├── middleware/
 │   │   │   ├── cors.js                  # allow-list from FRONTEND_URL
 │   │   │   ├── requestLogger.js
 │   │   │   ├── validate.js              # Zod → req.validated (Express 5 req.query is read-only)
+│   │   │   ├── requireJson.js           # 415 unless Content-Type is application/json
+│   │   │   ├── rateLimiters.js          # public submission limiter (express-rate-limit)
 │   │   │   ├── notFound.js
 │   │   │   └── errorHandler.js
-│   │   ├── validators/common.schema.js  # uuidParamSchema
+│   │   ├── validators/
+│   │   │   ├── common.schema.js         # uuidParamSchema
+│   │   │   └── inquiry.schema.js        # createInquirySchema (strict, trimmed, field messages)
 │   │   └── utils/
 │   │       ├── AppError.js
 │   │       └── logger.js                # levelled logger; JSON lines in production
@@ -66,7 +74,8 @@ Hard boundaries:
 │   ├── tests/
 │   │   ├── helpers/testApp.js
 │   │   ├── unit/                        # env, database, models, errorHandler, logger, validate
-│   │   ├── api/                         # Supertest: health, CORS, 404, body parsing, headers
+│   │   ├── api/                         # Supertest with stubbed services: health, CORS, inquiries, errors, rate limit
+│   │   ├── database/                    # real app + Sequelize + pg → in-process PGlite over TCP
 │   │   ├── schema/schema.test.js        # runs schema.sql in PGlite (real PostgreSQL in WASM)
 │   │   └── integration/                 # real PostgreSQL; skipped unless TEST_DATABASE_URL is set
 │   ├── certs/README.md                  # where to put the Supabase CA certificate
@@ -90,7 +99,7 @@ Hard boundaries:
 ├── LICENSE · README.md
 ```
 
-Planned additions: `backend/src/{services,controllers,routes}/{auth,inquiry}.*`, `validators/{auth,inquiry}.schema.js`, `middleware/{authenticate,rateLimiters}.js`, `utils/{jwt,password,buildInquiryWhere}.js`, `scripts/seed-admin.js`; frontend `auth/`, `pages/`, `components/`, `hooks/`, `validation/`; `render.yaml`; `.github/workflows/ci.yml`.
+Planned additions: `backend/src/{services,controllers,routes}/auth.*`, admin handlers in the inquiry controller/service/routes, `validators/auth.schema.js`, `middleware/authenticate.js`, a login limiter in `rateLimiters.js`, `utils/{jwt,password,buildInquiryWhere}.js`, `scripts/seed-admin.js`; frontend `auth/`, `pages/`, `components/`, `hooks/`, `validation/`; `render.yaml`; `.github/workflows/ci.yml`.
 
 Both packages are independent npm projects with ES modules (`"type": "module"`), so Render builds `backend/` and Vercel builds `frontend/` from a root-directory setting with no workspace tooling.
 
@@ -165,20 +174,26 @@ Planned per-route chain: `[rate limiter] → [authenticate] → validate(zod) �
 
 ### Error envelope [Implemented]
 
-`{ "error": { "code": "VALIDATION_ERROR", "message": "…", "details": [ { "path", "message" } ] } }`
+Success: `{ "success": true, "message": "…", "data": { … } }`
+Error: `{ "success": false, "error": { "code": "VALIDATION_ERROR", "message": "…", "details": [ { "field", "message" } ] } }`
+
+`details` has one entry per field (the first problem found), one entry per unknown field (`Unknown field "status" is not allowed`), and entries without `field` for problems with the body as a whole.
 
 | Source                                    | Status | Code                    |
 |-------------------------------------------|--------|-------------------------|
 | `AppError`                                | as set | as set                  |
 | `ZodError`                                | 400    | `VALIDATION_ERROR`      |
 | Malformed JSON / body > 20 kb             | 400 / 413 | `INVALID_JSON` / `PAYLOAD_TOO_LARGE` |
+| Body not declared as JSON                 | 415    | `UNSUPPORTED_MEDIA_TYPE` |
+| Rate limit exceeded                       | 429    | `RATE_LIMITED` (+ `Retry-After`, `RateLimit`, `RateLimit-Policy`) |
 | Disallowed CORS origin                    | 403    | `CORS_ORIGIN_DENIED`    |
 | Unknown route                             | 404    | `NOT_FOUND`             |
 | Sequelize unique / validation             | 409 / 400 | `CONFLICT` / `VALIDATION_ERROR` |
-| Sequelize connection error                | 503    | `DATABASE_UNAVAILABLE`  |
-| Anything else                             | 500    | `INTERNAL_ERROR` (no internals in production; a `debug` message is included in development) |
+| Sequelize connection / timeout error, or PostgreSQL `57014`, `57P01–03`, `53300`, `40001`, `40P01` | 503 | `DATABASE_UNAVAILABLE` |
+| Other database error                      | 500    | `DATABASE_ERROR`        |
+| Anything else                             | 500    | `INTERNAL_ERROR`        |
 
-5xx responses are logged at `error` level; 4xx at `debug`.
+Responses never contain `err.message`, SQL, stack traces or connection details, in any environment. 5xx responses are logged at `error` level with the full error; 4xx at `debug`.
 
 ### API surface
 
@@ -186,7 +201,7 @@ Planned per-route chain: `[rate limiter] → [authenticate] → validate(zod) �
 |--------|------------------------------|------|------------------------------------------------------|--------------|
 | GET    | `/api/health`                | none | liveness — process is serving; never touches the DB  | Implemented  |
 | GET    | `/api/health/db`             | none | readiness — `SELECT 1` with 3 s timeout; 503 if down | Implemented  |
-| POST   | `/api/inquiries`             | none | public form submission (rate-limited)                | Planned      |
+| POST   | `/api/inquiries`             | none | public form submission (rate-limited, deduplicated)  | Implemented  |
 | POST   | `/api/auth/login`            | none | email + password → JWT (rate-limited)                | Planned      |
 | GET    | `/api/auth/me`               | JWT  | validate token, return current admin                 | Planned      |
 | GET    | `/api/inquiries`             | JWT  | list with filters, search, pagination, sort          | Planned      |
@@ -207,16 +222,35 @@ WHERE category = :category AND user_type = :userType AND status = :status   -- e
 
 LIKE wildcards (`%`, `_`, `\`) are escaped and every value is a bound parameter.
 
-### Request validation rules (planned, Zod)
+### `POST /api/inquiries` [Implemented]
+
+Pipeline: `inquirySubmissionLimiter` → `requireJson` (415) → `validate({ body: createInquirySchema })` (400) → `inquiryController.create` → `inquiryService.createInquiry`.
+
+| Outcome | Status | Body |
+|---------|--------|------|
+| Stored | 201 | `{ success: true, message: "Thank you! Your inquiry has been received.", data: { id, duplicate: false } }` |
+| Identical submission within the duplicate window | 200 | `{ success: true, message: "We have already received this inquiry…", data: { id: <existing>, duplicate: true } }` |
+| Invalid | 400 | field errors |
+| Too many submissions | 429 | `RATE_LIMITED` |
+| Database unavailable / failed | 503 / 500 | generic message; nothing reported as saved |
+
+- **Mass assignment:** `z.strictObject` rejects unknown keys (such as `status`, `id` or timestamps) with a 400. The service also passes an explicit field allow-list to `Inquiry.create(values, { fields })`.
+- **Repeated submissions:** inside one transaction the service takes `pg_advisory_xact_lock(hashtextextended(<all six values>))`. It then looks for an identical inquiry created within `INQUIRY_DUPLICATE_WINDOW_MINUTES` (default 10) and either returns it or inserts. Double clicks and client retries therefore produce a single row, even when the requests arrive concurrently. Setting the window to 0 disables the check.
+- **Success only after commit:** the 201/200 response is sent only after the transaction commits.
+- **Rate limit:** per client IP, `INQUIRY_RATE_LIMIT_MAX` (default 10) per `INQUIRY_RATE_LIMIT_WINDOW_MINUTES` (default 15), using the in-memory store (one API instance; use a shared store if the API is scaled out). Requests that fail validation count. Requests rejected earlier by the JSON parser (malformed or oversized) do not reach the limiter, but they never reach the database either. Behind Render's proxy, `TRUST_PROXY=1` is required so the limiter sees real client IPs.
+
+### Request validation rules [Implemented for `POST /api/inquiries`]
 
 | Field      | Rule                                                                         |
 |------------|------------------------------------------------------------------------------|
 | `userType` | required, enum                                                                |
 | `category` | required, enum                                                                |
-| `name`     | required, trimmed, 2–100 chars                                                |
-| `email`    | required, trimmed, lower-cased, valid email, ≤ 254 chars                      |
-| `phone`    | required, trimmed, `+ digits spaces - ( )`, ≤ 20 chars, 7–15 digits           |
-| `message`  | required, trimmed, 10–2000 chars (stricter than the DB's 1–2000)              |
+| `name`     | required, trimmed, inner whitespace collapsed, 2–100 chars, at least one letter (any script), no control characters |
+| `email`    | required, trimmed, lower-cased, `z.email()`, ≤ 254 chars                      |
+| `phone`    | required, trimmed, whitespace collapsed; optional leading `+`; starts with a digit or `(`, ends with a digit or `)`; only digits, spaces, `-`, `(`, `)`; 7–15 digits (E.164 maximum); ≤ 20 chars. No country-specific rules. |
+| `message`  | required, trimmed, 10–2000 chars (stricter than the DB's 1–2000), no control characters except tab/newline, CRLF → LF |
+| `userType` / `category` | trimmed, then exact match (case-sensitive) |
+| body       | must be a JSON object; unknown keys rejected                                  |
 
 ---
 
@@ -287,6 +321,9 @@ All backend variables are validated by Zod in `src/config/env.js` at startup. Ev
 | `JWT_EXPIRES_IN`           | no       | `1h`           | `<number><s|m|h|d>` |
 | `FRONTEND_URL`             | **yes**  | —              | comma-separated http(s) origins for CORS; normalised (trailing slash and path removed) |
 | `TRUST_PROXY`              | no       | `0`            | set `1` on Render (needed for correct client IPs in rate limiting) |
+| `INQUIRY_RATE_LIMIT_MAX`   | no       | `10`           | public submissions per IP per window |
+| `INQUIRY_RATE_LIMIT_WINDOW_MINUTES` | no | `15`      | rate-limit window |
+| `INQUIRY_DUPLICATE_WINDOW_MINUTES` | no | `10`       | identical-submission window; `0` disables |
 | `LOG_LEVEL`                | no       | `info`         | `error` / `warn` / `info` / `debug` / `silent`; `debug` also logs SQL |
 | `TEST_DATABASE_URL`        | tests    | —              | enables `tests/integration` |
 | `VITE_API_BASE_URL`        | frontend | `/api`         | absolute API URL in production |
@@ -321,15 +358,17 @@ Files: root `.env.example` → copy to `backend/.env`; `frontend/.env.example` �
 | Brute-force login                   | rate limiter; generic error; dummy-hash compare                                 | Planned |
 | Token forgery / alg confusion       | HS256 pinned, ≥ 32-char non-placeholder secret, `iss`/`aud` checked             | Secret check implemented; rest planned |
 | Expired / revoked tokens            | `exp` verified; admin existence re-checked                                      | Planned |
-| SQL injection                       | Sequelize bound parameters only; LIKE wildcards escaped                         | Planned (no user queries yet) |
-| Invalid data                        | Zod at the API; Sequelize validators; DB CHECK / NOT NULL constraints           | DB + model implemented; API planned |
+| SQL injection                       | Sequelize bound parameters / replacements only; LIKE wildcards escaped          | Implemented for inquiry creation; search planned |
+| Invalid data                        | Zod at the API; Sequelize validators; DB CHECK / NOT NULL constraints           | Implemented |
+| Mass assignment                     | strict schema + service field allow-list + `create({ fields })`                 | Implemented |
+| Duplicate / replayed submissions    | locked dedupe window                                                            | Implemented |
 | Oversized bodies                    | 20 kb JSON limit → 413                                                          | Implemented |
-| Spam on public form                 | rate limiter on `POST /api/inquiries`                                           | Planned |
+| Spam on public form                 | rate limiter on `POST /api/inquiries`                                           | Implemented |
 | Direct access via Supabase REST     | RLS enabled, no policies; frontend has no Supabase keys                         | Implemented |
 | DB traffic interception / MITM      | TLS `verify-full` by default with Supabase CA; `sslmode` URL override ignored   | Implemented |
 | Cross-origin abuse                  | CORS allow-list (`FRONTEND_URL`); others → 403                                  | Implemented |
 | Header-based attacks                | Helmet on API (CSP `default-src 'none'`, HSTS, nosniff…); security headers in `vercel.json` | Implemented (frontend CSP planned) |
-| Secret leakage                      | env-only config; `.gitignore`; credentials never logged; no internals in production errors | Implemented |
+| Secret leakage                      | env-only config; `.gitignore`; credentials never logged; no internals in any error response | Implemented |
 
 ---
 

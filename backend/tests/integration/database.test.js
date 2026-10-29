@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDatabase } from '../../src/config/database.js';
 import { BACKEND_ROOT, loadDatabaseConfig, loadDotenv } from '../../src/config/env.js';
 import { COLUMNS_QUERY, compareModelsToColumns } from '../../src/models/schemaComparison.js';
+import { createInquiryService } from '../../src/services/inquiry.service.js';
 import { silentLogger } from '../../src/utils/logger.js';
 
 loadDotenv();
@@ -73,6 +74,32 @@ describe.skipIf(!TEST_DATABASE_URL)('database integration (TEST_DATABASE_URL)', 
       expect(found.passwordHash).toBeUndefined();
     } finally {
       await transaction.rollback();
+    }
+  });
+
+  it('creates an inquiry through the service and deduplicates a repeat (advisory lock)', async () => {
+    const service = createInquiryService({
+      sequelize: db.sequelize,
+      Inquiry: db.models.Inquiry,
+      duplicateWindowMs: 60_000,
+    });
+    const input = {
+      name: 'Integration Service',
+      email: `service-${Date.now()}@example.com`,
+      phone: '+44 20 7946 0958',
+      userType: 'School',
+      category: 'Concert',
+      message: 'Created by the integration suite; deleted afterwards.',
+    };
+    const results = await Promise.all([service.createInquiry(input), service.createInquiry(input)]);
+    try {
+      expect(results.map((r) => r.created).sort()).toEqual([false, true]);
+      expect(results[0].inquiry.id).toBe(results[1].inquiry.id);
+      const stored = await db.models.Inquiry.findByPk(results[0].inquiry.id);
+      expect(stored).toMatchObject({ status: 'New', email: input.email });
+      expect(stored.createdAt.getTime()).toBe(stored.updatedAt.getTime());
+    } finally {
+      await db.models.Inquiry.destroy({ where: { email: input.email } });
     }
   });
 

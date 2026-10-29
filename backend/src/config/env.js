@@ -9,6 +9,15 @@ export const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.
 
 export const DATABASE_SSL_MODES = Object.freeze(['verify-full', 'require', 'disable']);
 
+export const COOKIE_SAME_SITE_VALUES = Object.freeze(['strict', 'lax', 'none']);
+
+const booleanString = z
+  .enum(['true', 'false'], { error: 'must be "true" or "false"' })
+  .transform((value) => value === 'true');
+
+// bcrypt work factor. 12 ≈ 250 ms per hash on current hardware.
+const bcryptRounds = z.coerce.number().int().min(10).max(15).default(12);
+
 const JWT_SECRET_PLACEHOLDER_PREFIX = 'replace-with';
 
 export class ConfigError extends Error {
@@ -59,6 +68,10 @@ const databaseShape = {
   DATABASE_CONNECT_RETRIES: z.coerce.number().int().min(0).max(20).default(5),
 };
 
+const passwordHashingShape = {
+  BCRYPT_SALT_ROUNDS: bcryptRounds,
+};
+
 const serverShape = {
   ...databaseShape,
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
@@ -73,6 +86,13 @@ const serverShape = {
     .string()
     .regex(/^\d+[smhd]$/, 'JWT_EXPIRES_IN must look like 15m, 1h or 7d')
     .default('1h'),
+  JWT_ISSUER: z.string().min(1).max(200).default('edtech-crm-api'),
+  JWT_AUDIENCE: z.string().min(1).max(200).default('edtech-crm-admin'),
+  BCRYPT_SALT_ROUNDS: bcryptRounds,
+  AUTH_COOKIE_SECURE: booleanString.optional(),
+  AUTH_COOKIE_SAMESITE: z.enum(COOKIE_SAME_SITE_VALUES).default('strict'),
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1000).default(5),
+  LOGIN_RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
   FRONTEND_URL: z.string({ error: 'FRONTEND_URL is required' }).transform((value, ctx) => {
     const origins = [];
     for (const entry of parseOrigins(value)) {
@@ -90,6 +110,9 @@ const serverShape = {
     return origins;
   }),
   TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(0),
+  INQUIRY_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(10_000).default(10),
+  INQUIRY_RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
+  INQUIRY_DUPLICATE_WINDOW_MINUTES: z.coerce.number().int().min(0).max(1440).default(10),
 };
 
 function readCertificate(env, baseDir, issues) {
@@ -147,11 +170,39 @@ export function loadDatabaseConfig(rawEnv = process.env, { baseDir = BACKEND_ROO
   };
 }
 
+/** bcrypt settings for scripts that create admins. */
+export function loadPasswordHashingConfig(rawEnv = process.env) {
+  return { saltRounds: parse(passwordHashingShape, rawEnv).BCRYPT_SALT_ROUNDS };
+}
+
+/**
+ * Admin session cookie. `__Host-` prefixed when Secure, so browsers enforce
+ * Secure, Path=/ and no Domain attribute (the cookie cannot be set or read by
+ * other subdomains).
+ */
+function buildAuthCookieConfig(env, issues) {
+  const isProduction = env.NODE_ENV === 'production';
+  const secure = env.AUTH_COOKIE_SECURE ?? isProduction;
+  if (isProduction && !secure) {
+    issues.push('AUTH_COOKIE_SECURE: must be true when NODE_ENV=production');
+  }
+  if (env.AUTH_COOKIE_SAMESITE === 'none' && !secure) {
+    issues.push('AUTH_COOKIE_SAMESITE: "none" requires AUTH_COOKIE_SECURE=true');
+  }
+  return {
+    name: secure ? '__Host-edtech_admin_session' : 'edtech_admin_session',
+    secure,
+    sameSite: env.AUTH_COOKIE_SAMESITE,
+    path: '/',
+  };
+}
+
 /** Full configuration for the API server. Throws ConfigError listing every problem. */
 export function loadConfig(rawEnv = process.env, { baseDir = BACKEND_ROOT } = {}) {
   const env = parse(serverShape, rawEnv);
   const issues = [];
   const database = buildDatabaseConfig(env, baseDir, issues);
+  const cookie = buildAuthCookieConfig(env, issues);
   if (issues.length) throw new ConfigError(issues);
 
   return Object.freeze({
@@ -160,8 +211,28 @@ export function loadConfig(rawEnv = process.env, { baseDir = BACKEND_ROOT } = {}
     logLevel: env.LOG_LEVEL,
     port: env.PORT,
     database,
-    jwt: { secret: env.JWT_SECRET, expiresIn: env.JWT_EXPIRES_IN },
+    jwt: {
+      secret: env.JWT_SECRET,
+      expiresIn: env.JWT_EXPIRES_IN,
+      issuer: env.JWT_ISSUER,
+      audience: env.JWT_AUDIENCE,
+    },
+    auth: {
+      bcryptRounds: env.BCRYPT_SALT_ROUNDS,
+      cookie,
+      loginRateLimit: {
+        max: env.LOGIN_RATE_LIMIT_MAX,
+        windowMs: env.LOGIN_RATE_LIMIT_WINDOW_MINUTES * 60_000,
+      },
+    },
     frontendOrigins: env.FRONTEND_URL,
     trustProxy: env.TRUST_PROXY,
+    inquiries: {
+      rateLimit: {
+        max: env.INQUIRY_RATE_LIMIT_MAX,
+        windowMs: env.INQUIRY_RATE_LIMIT_WINDOW_MINUTES * 60_000,
+      },
+      duplicateWindowMs: env.INQUIRY_DUPLICATE_WINDOW_MINUTES * 60_000,
+    },
   });
 }

@@ -1,6 +1,7 @@
 import {
   ConnectionError,
   DatabaseError,
+  TimeoutError,
   UniqueConstraintError,
   ValidationError,
   ValidationErrorItem,
@@ -44,7 +45,7 @@ describe('normalizeError', () => {
     expect(normalizeError(result.error)).toMatchObject({
       status: 400,
       code: 'VALIDATION_ERROR',
-      details: [{ path: 'email', message: expect.any(String) }],
+      details: [{ field: 'email', message: expect.any(String) }],
     });
   });
 
@@ -52,7 +53,7 @@ describe('normalizeError', () => {
     const item = new ValidationErrorItem('bad', 'Validation error', 'name', 'x');
     expect(normalizeError(new ValidationError('bad', [item]))).toMatchObject({
       status: 400,
-      details: [{ path: 'name', message: 'bad' }],
+      details: [{ field: 'name', message: 'bad' }],
     });
     expect(normalizeError(new UniqueConstraintError({ errors: [item] }))).toMatchObject({
       status: 409,
@@ -68,6 +69,30 @@ describe('normalizeError', () => {
     });
   });
 
+  it.each(['57014', '57P01', '57P03', '53300', '40001', '40P01'])(
+    'maps transient PostgreSQL error %s to 503',
+    (code) => {
+      const err = new DatabaseError(Object.assign(new Error('transient'), { code }));
+      expect(normalizeError(err)).toMatchObject({ status: 503, code: 'DATABASE_UNAVAILABLE' });
+    },
+  );
+
+  it('maps Sequelize timeouts to 503', () => {
+    expect(normalizeError(new TimeoutError(new Error('lock timeout')))).toMatchObject({
+      status: 503,
+    });
+  });
+
+  it('formats unknown keys and root-level Zod issues', () => {
+    const strict = z.strictObject({ a: z.string() });
+    expect(normalizeError(strict.safeParse({ a: 'x', b: 1 }).error).details).toEqual([
+      { field: 'b', message: 'Unknown field "b" is not allowed' },
+    ]);
+    expect(normalizeError(strict.safeParse([]).error).details).toEqual([
+      { message: expect.any(String) },
+    ]);
+  });
+
   it('hides unknown errors behind a generic 500', () => {
     expect(normalizeError(new Error('secret internal detail'))).toEqual({
       status: 500,
@@ -78,18 +103,14 @@ describe('normalizeError', () => {
 });
 
 describe('errorHandler', () => {
-  it('omits internal messages in production and logs the failure', () => {
+  it('omits internal messages and logs the failure server-side', () => {
     const { logger, entries } = captureLogger();
     const res = fakeRes();
-    errorHandler({ logger, isProduction: true })(
-      new Error('secret internal detail'),
-      fakeReq,
-      res,
-      () => {},
-    );
+    errorHandler({ logger })(new Error('secret internal detail'), fakeReq, res, () => {});
 
     expect(res.statusCode).toBe(500);
     expect(res.body).toEqual({
+      success: false,
       error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' },
     });
     expect(entries[0]).toMatchObject({
@@ -98,22 +119,20 @@ describe('errorHandler', () => {
     });
   });
 
-  it('includes the underlying message outside production to aid debugging', () => {
+  it('never sends internal messages, in any environment', () => {
     const { logger } = captureLogger();
     const res = fakeRes();
-    errorHandler({ logger, isProduction: false })(new Error('boom'), fakeReq, res, () => {});
+    errorHandler({ logger })(new Error('boom: postgres://user:pw@host/db'), fakeReq, res, () => {});
 
-    expect(res.body.error.debug).toBe('boom');
+    expect(res.body).toEqual({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' },
+    });
   });
 
   it('does not log client errors at error level', () => {
     const { logger, entries } = captureLogger();
-    errorHandler({ logger, isProduction: true })(
-      new AppError(404, 'NOT_FOUND', 'nope'),
-      fakeReq,
-      fakeRes(),
-      () => {},
-    );
+    errorHandler({ logger })(new AppError(404, 'NOT_FOUND', 'nope'), fakeReq, fakeRes(), () => {});
     expect(entries.map((e) => e.level)).toEqual(['debug']);
   });
 });

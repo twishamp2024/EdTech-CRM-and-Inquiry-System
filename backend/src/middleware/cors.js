@@ -18,7 +18,9 @@ export function createCorsMiddleware(allowedOrigins) {
       );
     },
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type'],
+    // Allows the session cookie on cross-origin calls from allowed origins only.
+    credentials: true,
     maxAge: 600,
   });
 }

@@ -95,6 +95,14 @@ export function defineInquiry(sequelize) {
     {
       tableName: 'inquiries',
       timestamps: true,
+      hooks: {
+        // Each NOW default is evaluated separately, so the two timestamps can
+        // differ by a millisecond on insert. A new row was created and last
+        // updated at the same instant.
+        beforeCreate(inquiry) {
+          inquiry.updatedAt = inquiry.createdAt;
+        },
+      },
     },
   );
 }

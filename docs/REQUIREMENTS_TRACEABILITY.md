@@ -1,12 +1,12 @@
 # Requirements Traceability Matrix
 
 Every mandatory requirement, the files that implement (or will implement) it, and how it is verified.
-Last updated: **2026-10-30, end of stage 2** (foundation + database layer). Status is only `Verified` when the named check was actually executed.
+Last updated: **2026-10-30, end of stage 3** (public inquiry submission API). Status is only `Verified` when the named check was actually executed.
 Phase numbers refer to [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Paths are relative to the repository root.
 
 **Status legend:** `Planned` → `Implemented` → `Verified` (verification actually executed). `Blocked (Bx)` = waiting on a blocker from the implementation plan.
 **Status legend (partial):** `Partial` = the layers listed in *Done so far* exist and are verified; the rest is planned.
-**Verification legend:** **UT** unit test · **API** Supertest with stubbed services · **SCH** `schema.sql` executed in PGlite (real PostgreSQL in WASM, `backend/tests/schema`) · **IT** integration test against real Postgres (needs `TEST_DATABASE_URL`) · **FE** frontend component test · **MAN** manual check (steps in README) · **REV** code/file review · **CI** automated pipeline.
+**Verification legend:** **UT** unit test · **API** Supertest with stubbed services · **DB** Supertest through the real app, service, Sequelize and `pg` against an isolated in-process PostgreSQL (PGlite socket, `backend/tests/database`) · **SCH** `schema.sql` executed in PGlite (real PostgreSQL in WASM, `backend/tests/schema`) · **IT** integration test against real Postgres (needs `TEST_DATABASE_URL`) · **FE** frontend component test · **MAN** manual check (steps in README) · **REV** code/file review · **CI** automated pipeline.
 
 ---
 
@@ -14,14 +14,14 @@ Phase numbers refer to [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Paths a
 
 | ID | Requirement | Planned implementation | Verification | Phase | Status |
 |----|-------------|------------------------|--------------|-------|--------|
-| F-01 | User Type field with options Parent, Student, School | `backend/src/constants/inquiry.js` (`USER_TYPES`); `backend/src/validators/inquiry.schema.js`; `backend/src/models/Inquiry.js` (`isIn`); `schema.sql` (`CHECK`); `frontend/src/constants/inquiry.js`; `frontend/src/pages/InquiryFormPage.jsx` (`SelectField`) | UT: schema accepts each value and rejects others · FE: select renders exactly 3 options · IT: DB rejects invalid `user_type` | 1, 4, 5 | Partial — DB CHECK, constants and model `isIn` verified (SCH, UT); API + form planned |
-| F-02 | Category field with options Scholarship, Concert, Admission, General Query | Same files as F-01 (`CATEGORIES`) | UT · FE: 4 options · IT: DB rejects invalid `category` | 1, 4, 5 | Partial — DB CHECK, constants and model `isIn` verified (SCH, UT); API + form planned |
-| F-03 | Name required | `backend/src/validators/inquiry.schema.js`; `frontend/src/validation/inquiry.schema.js`; `schema.sql` (`NOT NULL`) | UT: missing/blank/too-short name → error · API: `400` with `details[].path = name` · FE: inline error, no request sent | 4, 5 | Partial — DB NOT NULL/CHECK and model validators verified (SCH, UT); API + form planned |
-| F-04 | Email required | As F-03 (email format + max length) | UT: missing/invalid email → error · API · FE | 4, 5 | Partial — DB NOT NULL/CHECK and model validators verified (SCH, UT); API + form planned |
-| F-05 | Phone Number required | As F-03 (allowed chars, 7–15 digits) | UT: missing, letters, too few/many digits → error; `+91 98765-43210` accepted · API · FE | 4, 5 | Partial — DB NOT NULL/CHECK and model validators verified (SCH, UT); API + form planned |
-| F-06 | Message/Query required | As F-03 (10–2000 chars); `schema.sql` length `CHECK` | UT · API · FE | 4, 5 | Partial — DB NOT NULL/CHECK and model validators verified (SCH, UT); API + form planned |
-| F-07 | Submissions saved to Supabase PostgreSQL | `backend/src/routes/inquiry.routes.js` (`POST /api/inquiries`); `backend/src/controllers/inquiry.controller.js`; `backend/src/services/inquiry.service.js` (`create`); `backend/src/models/Inquiry.js`; `backend/src/config/database.js`; `frontend/src/api/inquiries.api.js` | API: `201` + body shape, service called with parsed data · IT: row persisted with `status = 'New'` and `created_at` set · MAN: submit via UI, row visible in Supabase table editor | 4, 5 | Partial — `Inquiry` model + Sequelize/pg connection layer done; integration test written, not run (B1); route planned |
-| F-08 | Form is publicly accessible (no login) | `frontend/src/App.jsx` (route `/` outside `ProtectedRoute`); `inquiry.routes.js` (`POST /` without `authenticate`) | API: POST without token → `201` · FE: form renders without auth context | 4, 5 | Planned |
+| F-01 | User Type field with options Parent, Student, School | `backend/src/constants/inquiry.js` (`USER_TYPES`); `backend/src/validators/inquiry.schema.js` (`choice`); `backend/src/models/Inquiry.js` (`isIn`); `schema.sql` (CHECK); frontend select planned | UT `inquiry.schema.test.js`: each value accepted, `Teacher`/`parent`/`PARENT`/`Parents` rejected · API `inquiries.test.js`: invalid user type → 400 with message · SCH: CHECK values = constants · FE planned | 1, 4, 5 | Partial — **server side Verified** (UT, API, SCH); form dropdown planned (Phase 5) |
+| F-02 | Category field with options Scholarship, Concert, Admission, General Query | `CATEGORIES` in constants; `backend/src/validators/inquiry.schema.js`; model `isIn`; `schema.sql` CHECK; frontend select planned | UT: 4 values accepted, `Sports`/`admission`/`General`/`General  Query` rejected · API: invalid category → 400 · SCH · FE planned | 1, 4, 5 | Partial — **server side Verified** (UT, API, SCH); form dropdown planned |
+| F-03 | Name required | `backend/src/validators/inquiry.schema.js` (trim, required, 2–100 chars, ≥ 1 letter, no control chars, whitespace collapsed); `schema.sql` NOT NULL + length CHECK | UT: missing / null / empty / whitespace-only / non-string / too short / too long / digits-only / NUL byte · API: missing `name` → 400 `{field:"name"}`; whitespace-only → 400 · DB: invalid request writes no row | 4, 5 | Partial — **server side Verified**; client-side validation planned |
+| F-04 | Email required | `backend/src/validators/inquiry.schema.js` (trim, required, ≤ 254, lower-cased, `z.email`); `schema.sql` format CHECK | UT: 8 malformed formats, > 254 chars, case normalised · API: `asha@example` → 400 with message, service not called · DB: stored lower-cased | 4, 5 | Partial — **server side Verified**; client-side validation planned |
+| F-05 | Phone Number required | `backend/src/validators/inquiry.schema.js` (trim, required, international format: optional leading `+`, digits/spaces/hyphens/brackets, 7–15 digits per E.164, ≤ 20 chars; not tied to any one country); `schema.sql` CHECK | UT: 8 international formats accepted (US, UK, AU, DE, JP, IN, local); letters, misplaced `+`, leading `-`, < 7 / > 15 digits, > 20 chars rejected · API: invalid phone → 400 · DB: stored as text, `+` kept | 4, 5 | Partial — **server side Verified**; client-side validation planned |
+| F-06 | Message/Query required | `backend/src/validators/inquiry.schema.js` (trim, required, 10–2000 chars, no control chars, CRLF → LF); `schema.sql` length CHECK (1–2000) | UT: missing / empty / < 10 / 2000 accepted / 2001 rejected / control chars · API: 2001 chars → 400 | 4, 5 | Partial — **server side Verified**; client-side validation planned |
+| F-07 | Submissions saved to Supabase PostgreSQL | `backend/src/routes/inquiry.routes.js` (`POST /api/inquiries`); `controllers/inquiry.controller.js`; `services/inquiry.service.js` (`createInquiry`, explicit field allow-list, dedupe in a transaction); `models/Inquiry.js`; `config/database.js`; `server.js` wiring | API: 201 `{success, message, data:{id, duplicate:false}}`; service receives only sanitised fields · DB `inquiry.persistence.test.js`: row stored with status `New`, `created_at` = `updated_at` ≈ now, values normalised; response id = row id · live smoke test (PGlite over TCP) 201 and row verified · IT written (`TEST_DATABASE_URL`), not run | 4, 5 | **Verified** against PostgreSQL (PGlite); real Supabase run blocked (B1); frontend form planned |
+| F-08 | Form is publicly accessible (no login) | `inquiry.routes.js`: `POST /` has no `authenticate` middleware; frontend route planned | API: submission with no Authorization header → 201; browser request from the allowed origin → 201 with CORS header · DB: same, end to end | 4, 5 | Partial — **API Verified**; frontend route planned |
 
 ## 2. Admin authentication
 
@@ -33,7 +33,7 @@ Phase numbers refer to [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Paths a
 | A-04 | JWT signature verified | `backend/src/utils/jwt.js` (`verifyAccessToken`, `algorithms: ['HS256']`); `backend/src/middleware/authenticate.js` | UT: tampered payload, token signed with another secret, `alg: none` token → rejected · API: each → `401 INVALID_TOKEN` | 3 | Planned |
 | A-05 | JWT expiration verified | `jwt.js` (`expiresIn` from `JWT_EXPIRES_IN`); `authenticate.js` (`TokenExpiredError` → `TOKEN_EXPIRED`); `frontend/src/api/client.js` (401 → logout) | UT: token with past `exp` → rejected · API: expired token → `401 TOKEN_EXPIRED` · FE: 401 response clears session and redirects · MAN: README shows how to mint a 10-second token and observe expiry | 3, 6 | Planned |
 | A-06 | Admin dashboard protected | `frontend/src/auth/ProtectedRoute.jsx`; `frontend/src/auth/AuthContext.jsx`; `frontend/src/App.jsx` | FE: visiting `/admin` unauthenticated → redirected to `/admin/login`; authenticated → dashboard renders · MAN | 6 | Planned |
-| A-07 | All inquiry-management APIs protected | `backend/src/routes/inquiry.routes.js` (`authenticate` on `GET /`, `GET /:id`, `PATCH /:id/status`); `GET /api/auth/me` | API: table-driven test hits every protected route with no token, malformed header, invalid token, expired token → all `401`; valid token → `2xx` | 3, 4 | Planned |
+| A-07 | All inquiry-management APIs protected | `backend/src/routes/inquiry.routes.js` (`authenticate` on `GET /`, `GET /:id`, `PATCH /:id/status`); `GET /api/auth/me` | API: table-driven test hits every protected route with no token, malformed header, invalid token, expired token → all `401`; valid token → `2xx`. Note: `POST /api/inquiries` is intentionally public (F-08) | 3, 4 | Planned |
 | A-08 | No hardcoded credentials; admin provisioning is secure | `backend/scripts/seed-admin.js` (env/prompt, min length 12, no logging); no registration route; `.env.example` placeholders only; server refuses the placeholder `JWT_SECRET` (done, UT); DB rejects non-bcrypt `password_hash` (done, SCH) | REV · UT: seed script rejects short passwords · CI: secret-pattern grep | 3, 7 | Planned |
 | A-09 | Brute-force and enumeration resistance (production-conscious) | `backend/src/middleware/rateLimiters.js` (`loginLimiter`); dummy-hash compare in `auth.service.js` | API: 11th attempt in window → `429`; unknown email and wrong password return identical bodies | 3 | Planned |
 
@@ -110,3 +110,63 @@ Phase numbers refer to [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Paths a
 | S-19 | Vite proxies API requests in development | `frontend/vite.config.js` (`/api` → `DEV_API_PROXY_TARGET`, default `localhost:4000`) | curl `localhost:5173/api/health` → 200 from Express | Verified |
 | S-20 | Appropriate TLS verification for the Supabase endpoint | `DATABASE_SSL_MODE=verify-full` default + `DATABASE_SSL_CA[_PATH]`; `require` opt-in with warning; `disable` refused in production; URL `sslmode` ignored | UT · live: real Supabase pooler rejected without CA (`SELF_SIGNED_CERT_IN_CHAIN`) | Verified (successful verified connection needs B1 + CA) |
 | S-21 | Automated tests for health endpoint and foundation | `backend/tests/**`, `frontend/tests/**` | backend 121 passed / 4 skipped; frontend 11 passed | Verified |
+
+## 8. Stage 3 — public inquiry submission API (`POST /api/inquiries`)
+
+| ID | Requirement | Implementation | Verification (test file → cases) | Status |
+|----|-------------|----------------|----------------------------------|--------|
+| I-01 | Public endpoint, no authentication | `routes/inquiry.routes.js` (no auth middleware) | `api/inquiries.test.js` "is public", "works for browser requests from the configured frontend origin" · `database/…` all cases unauthenticated | Verified |
+| I-02 | Accepts name, email, phone, userType, category, message | `validators/inquiry.schema.js` (`createInquirySchema`) | `unit/inquiry.schema.test.js` "accepts a complete inquiry" · API "creates an inquiry…" | Verified |
+| I-03 | Server-side validation independent of the frontend | Zod in `validate()` middleware before the controller | API: every invalid case → 400 and `createInquiry` **not called** | Verified |
+| I-04 | Trim string input | `.trim()` on every field; enums trimmed in `preprocess`; inner whitespace collapsed for single-line fields | UT "trims every field and normalises…" · API "passes only sanitised, approved fields" · DB: stored `Ravi Kumar` from `"  Ravi  Kumar "` | Verified |
+| I-05 | Reject empty required fields | `requiredText()` (`min(1)` after trim, `null`/missing → "X is required") | UT "reports every missing field", blanks `''`/`'   '`/`'\t\n'`, null · API "lists every missing required field", one test per field, whitespace-only | Verified |
+| I-06 | Validate email format | `z.email()` after trim + lower-case, ≤ 254 | UT 8 invalid formats + length · API "rejects an invalid email" | Verified |
+| I-07 | Phone length and reasonable international formatting | `PHONE_FORMAT` + 7–15 digit count + ≤ 20 chars | UT 8 valid international numbers, 7 invalid · API "rejects an invalid phone number" | Verified |
+| I-08 | Sensible maximum lengths | name 100, email 254, phone 20, message 2000 (`FIELD_LIMITS`); matching DB CHECKs | UT boundary cases (100/101, 254/255+, 2000/2001) · API over-long message | Verified |
+| I-09 | Only Parent / Student / School | `choice('User type', USER_TYPES)` | UT, API, SCH | Verified |
+| I-10 | Only Scholarship / Concert / Admission / General Query | `choice('Category', CATEGORIES)` | UT, API, SCH | Verified |
+| I-11 | Limit message length | 10–2000 chars | UT, API | Verified |
+| I-12 | Reject malformed and invalid input | `express.json` errors → `INVALID_JSON`; non-object bodies → 400; `requireJson` → 415; control characters rejected | API "rejects malformed JSON", "JSON array body", "empty JSON body", form/text bodies → 415 · UT non-object bodies, NUL bytes | Verified |
+| I-13 | Prevent mass assignment | `z.strictObject` rejects unknown keys with a per-field error; `CREATABLE_FIELDS` allow-list in the service and `Inquiry.create(…, { fields })` | UT `status`/`id`/`createdAt`/`isAdmin` rejected · API "rejects attempts to set unapproved fields", service not called · DB "writes nothing for an invalid request" | Verified |
+| I-14 | 400 with understandable field errors | `errorHandler.formatZodIssues`: `details: [{ field, message }]`, first problem per field, unknown fields listed | API exact-body assertions · UT "reports only the first problem for each field" | Verified |
+| I-15 | Save with Sequelize; status defaults to New | `inquiry.service.js` → `Inquiry.create`; model + DB default `New` | DB "stores a valid inquiry with status New…" · live smoke test row check | Verified (PGlite); Supabase blocked (B1) |
+| I-16 | Timestamps populated correctly | Sequelize timestamps; `beforeCreate` hook makes `updatedAt` = `createdAt` on insert; DB trigger on update | DB: both ≈ request time and equal (this test found a 1 ms mismatch, now fixed) · SCH trigger test | Verified |
+| I-17 | 201 + consistent JSON with success message and record id | `inquiry.controller.js`: `{ success: true, message, data: { id, duplicate } }`; errors `{ success: false, error: {…} }` | API exact-body assertions · DB response id = stored id | Verified |
+| I-18 | Database errors without stack traces, credentials or internals | `errorHandler`: connection / timeout / transient PG codes → 503 `DATABASE_UNAVAILABLE`; other DB errors → 500 `DATABASE_ERROR`; unknown → 500 `INTERNAL_ERROR`; the response never includes `err.message`, in any environment; full detail logged server-side | API 5 failure cases assert no host, password, SQL or stack text in the body and that the failure is logged · UT transient codes · DB unreachable database → 503 with no leak · live outage → 503 | Verified |
+| I-19 | Never report success when persistence fails | 201/200 are sent only after `createInquiry` resolves, i.e. after the transaction commits | API: every failure case asserts `success: false` and no `data` · DB unreachable → 503 · live outage → 503 | Verified |
+| I-20 | Limit request body size | global `express.json({ limit: '20kb' })` | API "rejects bodies larger than 20 kb with 413", service not called | Verified |
+| I-21 | Rate-limit public submissions | `middleware/rateLimiters.js` (express-rate-limit, per IP, default 10 / 15 min, `INQUIRY_RATE_LIMIT_*`), 429 `RATE_LIMITED` + `Retry-After` + `RateLimit` headers | API "allows the configured number…then 429", "counts invalid submissions too" · live smoke test 429 with headers | Verified. In-memory store (single instance). Bodies rejected by the JSON parser (malformed, oversized) never reach the limiter, but they never touch the database either |
+| I-22 | Handle repeated submissions gracefully | `inquiry.service.js`: an identical submission within `INQUIRY_DUPLICATE_WINDOW_MINUTES` (default 10) returns the existing id with HTTP 200 and `duplicate: true`; transaction + `pg_advisory_xact_lock` serialises check-and-insert | DB "returns the existing id…", "stores one row when identical submissions arrive at the same time", "changed message is new", "window passed", "detection disabled" · API 200 shape · IT concurrent dedupe on real PostgreSQL written, not run (B1) | Verified on PGlite (which serialises connections); real lock contention verified only by IT once B1 is resolved |
+| I-23 | Credentials only in the backend | `DATABASE_URL` read only by `backend/src/config`; frontend has no DB settings | Guard grep (P-03) | Verified |
+| I-24 | Centralised error handling | every failure flows through `errorHandler` (Zod, body parser, 415, 429, Sequelize, unknown) | API + UT above | Verified |
+| I-25 | Tests use no production credentials | API tests use stubs; DB tests use in-process PGlite on a random port; IT only with an explicit `TEST_DATABASE_URL` | REV | Verified |
+
+### Test inventory (run 2026-10-30, `cd backend && npm test`)
+
+| File | Tests | Result |
+|------|-------|--------|
+| `tests/unit/inquiry.schema.test.js` | 58 | passed |
+| `tests/api/inquiries.test.js` | 32 | passed |
+| `tests/database/inquiry.persistence.test.js` | 8 | passed |
+| `tests/unit/errorHandler.test.js` | 15 | passed |
+| `tests/schema/schema.test.js` | 39 | passed |
+| `tests/unit/models.test.js` | 20 | passed |
+| `tests/unit/database.test.js` | 20 | passed |
+| `tests/unit/env.test.js` | 17 | passed |
+| `tests/unit/foundation.test.js` | 6 | passed |
+| `tests/api/app.test.js` | 8 | passed |
+| `tests/api/health.test.js` | 4 | passed |
+| `tests/integration/database.test.js` | 5 | **skipped** (no `TEST_DATABASE_URL`) |
+| **Total** | **232** | **227 passed, 5 skipped, 0 failed** |
+
+Required test categories → where they are covered:
+
+| Requested test | Covered by |
+|----------------|-----------|
+| Valid submission | API "creates an inquiry and returns 201…"; DB "stores a valid inquiry with status New…" |
+| Missing required fields | API "lists every missing required field" + 6 per-field cases + whitespace-only; UT required-field group |
+| Invalid email | API "rejects an invalid email"; UT 8 formats + length |
+| Invalid category and user type | API "rejects an invalid category and user type"; UT 4 + 4 values |
+| Malformed or oversized requests | API malformed JSON, array body, empty body, 413 oversize, 415 form/text; UT non-object bodies, control chars |
+| Database failure handling | API 503 unreachable, 503 timeout, 500 DB error, 500 unknown, 409 unique; DB real unreachable database → 503 |
+| Public submission without authentication | API "is public…", CORS browser case; DB end-to-end cases |

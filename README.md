@@ -2,7 +2,7 @@
 
 An EdTech CRM and inquiry management system designed for prospective student inquiries and administrative lead management.
 
-> **Status:** stage 2 of the [implementation plan](docs/IMPLEMENTATION_PLAN.md): project foundation and database layer are in place. Admin authentication, the inquiry APIs, the public form and the dashboard are built next.
+> **Status:** stage 3 of the [implementation plan](docs/IMPLEMENTATION_PLAN.md): the foundation, the database layer and the public inquiry submission API (`POST /api/inquiries`) are in place. Admin authentication, the admin inquiry APIs, the form UI and the dashboard are built next.
 
 ## Project Structure & Documentation
 
@@ -110,6 +110,38 @@ The first returns `{"status":"ok",…}`. The second returns `{"status":"ok","dat
 - The server connects to the database before accepting traffic. Transient errors are retried (`DATABASE_CONNECT_RETRIES`, default 5, with backoff). Errors retrying cannot fix (wrong password, certificate problems, unknown database) fail immediately. Every failure is logged with a hint, and credentials are never logged.
 - `SIGTERM`/`SIGINT` trigger a graceful shutdown.
 
+## API
+
+### `POST /api/inquiries` (public)
+
+No authentication. JSON body with exactly these fields:
+
+| Field | Rules |
+|-------|-------|
+| `name` | required, 2–100 characters, must include a letter |
+| `email` | required, valid address, ≤ 254 characters (stored lower-cased) |
+| `phone` | required, any country: optional leading `+`, digits, spaces, `-`, `(`, `)`; 7–15 digits; ≤ 20 characters |
+| `userType` | `Parent`, `Student` or `School` |
+| `category` | `Scholarship`, `Concert`, `Admission` or `General Query` |
+| `message` | required, 10–2000 characters |
+
+All strings are trimmed. Any other field (for example `status`) is rejected.
+
+```bash
+curl -i http://localhost:4000/api/inquiries \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Meera Iyer","email":"meera@example.com","phone":"+44 20 7946 0958","userType":"Parent","category":"Concert","message":"Are concert tickets open to parents?"}'
+```
+
+| Response | When |
+|----------|------|
+| `201` `{"success":true,"message":"Thank you! Your inquiry has been received.","data":{"id":"…","duplicate":false}}` | stored with status `New` |
+| `200` `{…,"data":{"id":"<existing id>","duplicate":true}}` | the same inquiry was already received in the last `INQUIRY_DUPLICATE_WINDOW_MINUTES` (default 10) |
+| `400` `{"success":false,"error":{"code":"VALIDATION_ERROR","details":[{"field":"email","message":"…"}]}}` | invalid or missing fields, malformed JSON, unknown fields |
+| `413` / `415` | body over 20 kb / not `application/json` |
+| `429` `RATE_LIMITED` | more than `INQUIRY_RATE_LIMIT_MAX` (default 10) submissions per IP per `INQUIRY_RATE_LIMIT_WINDOW_MINUTES` (default 15) |
+| `503` / `500` | database unavailable or failed; nothing was saved |
+
 ## 3. Run the frontend
 
 ```bash
@@ -136,7 +168,7 @@ cd backend && npm test
 cd frontend && npm test
 ```
 
-- **Backend:** unit tests (config, TLS options, retry logic, models, error handling), Supertest API tests (health, CORS, headers, body parsing, 404), and **schema tests** that execute `schema.sql` in [PGlite](https://pglite.dev), a real PostgreSQL engine compiled to WebAssembly. These check constraints, defaults, the `updated_at` trigger, indexes and RLS without any database server. SQLite is not used anywhere.
+- **Backend:** unit tests (config, TLS options, retry logic, models, error handling, inquiry validation), Supertest API tests with stubbed services (health, CORS, headers, body parsing, 404, inquiry submission, rate limiting, database-failure responses), **persistence tests** that run the real app, Sequelize and `pg` against an in-process PGlite PostgreSQL over TCP, and **schema tests** that execute `schema.sql` in [PGlite](https://pglite.dev), a real PostgreSQL engine compiled to WebAssembly. These check constraints, defaults, the `updated_at` trigger, indexes and RLS without any database server. SQLite is not used anywhere.
 - **Integration tests** run against a real PostgreSQL database and are **skipped** unless `TEST_DATABASE_URL` is set. Use a separate Supabase project or a disposable database, never production. They apply `schema.sql`, and every row they write is rolled back.
   ```bash
   TEST_DATABASE_URL='postgresql://…' npm run test:integration

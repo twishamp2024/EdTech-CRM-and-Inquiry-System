@@ -8,6 +8,7 @@ describe('unknown routes', () => {
 
     expect(res.status).toBe(404);
     expect(res.body).toEqual({
+      success: false,
       error: { code: 'NOT_FOUND', message: 'Route GET /api/does-not-exist not found' },
     });
   });
@@ -25,13 +26,15 @@ describe('CORS', () => {
     const res = await request(buildTestApp())
       .options('/api/inquiries')
       .set('Origin', TEST_ORIGIN)
-      .set('Access-Control-Request-Method', 'POST')
-      .set('Access-Control-Request-Headers', 'Content-Type, Authorization');
+      .set('Access-Control-Request-Method', 'PATCH')
+      .set('Access-Control-Request-Headers', 'Content-Type');
 
     expect(res.status).toBe(204);
     expect(res.headers['access-control-allow-origin']).toBe(TEST_ORIGIN);
-    expect(res.headers['access-control-allow-methods']).toContain('POST');
-    expect(res.headers['access-control-allow-headers']).toContain('Authorization');
+    expect(res.headers['access-control-allow-methods']).toContain('PATCH');
+    expect(res.headers['access-control-allow-headers']).toBe('Content-Type');
+    // Cookies may be sent cross-origin only to allowed origins.
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
   });
 
   it('rejects other origins with 403', async () => {

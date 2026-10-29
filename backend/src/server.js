@@ -1,6 +1,11 @@
 import { createApp } from './app.js';
 import { createDatabase } from './config/database.js';
 import { ConfigError, loadConfig, loadDotenv } from './config/env.js';
+import { createAdminRepository } from './services/admin.repository.js';
+import { createAuthService } from './services/auth.service.js';
+import { createInquiryService } from './services/inquiry.service.js';
+import { createTokenRevocationList } from './services/tokenRevocation.js';
+import { createTokenService } from './utils/jwt.js';
 import { createLogger } from './utils/logger.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -46,7 +51,25 @@ async function main() {
     process.exit(1);
   }
 
-  const app = createApp({ config, logger, checkDatabase: () => db.checkConnection() });
+  const services = {
+    inquiryService: createInquiryService({
+      sequelize: db.sequelize,
+      Inquiry: db.models.Inquiry,
+      duplicateWindowMs: config.inquiries.duplicateWindowMs,
+    }),
+    authService: createAuthService({
+      admins: createAdminRepository(db.models.Admin),
+      tokenService: createTokenService(config.jwt),
+      revocationList: createTokenRevocationList(),
+      bcryptRounds: config.auth.bcryptRounds,
+    }),
+  };
+  const app = createApp({
+    config,
+    logger,
+    checkDatabase: () => db.checkConnection(),
+    services,
+  });
   const server = app.listen(config.port, () => {
     logger.info(`API listening on port ${config.port}`, { env: config.env });
   });

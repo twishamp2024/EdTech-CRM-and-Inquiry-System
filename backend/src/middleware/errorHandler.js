@@ -1,6 +1,8 @@
 import {
   BaseError as SequelizeBaseError,
   ConnectionError,
+  DatabaseError,
+  TimeoutError,
   UniqueConstraintError,
   ValidationError as SequelizeValidationError,
 } from 'sequelize';
@@ -30,6 +32,42 @@ const BODY_PARSER_ERRORS = {
   },
 };
 
+// PostgreSQL errors that mean "temporarily unable", not "bad request":
+// query_canceled (statement_timeout), admin/crash shutdown, cannot connect now,
+// too many connections, serialization/deadlock.
+const TRANSIENT_PG_CODES = new Set(['57014', '57P01', '57P02', '57P03', '53300', '40001', '40P01']);
+
+const DATABASE_UNAVAILABLE = {
+  status: 503,
+  code: 'DATABASE_UNAVAILABLE',
+  message: 'The service is temporarily unavailable. Please try again shortly.',
+};
+
+/**
+ * Field-level errors: one entry per field (the first problem found), plus an
+ * entry per unknown field. Root-level problems have no `field`.
+ */
+function formatZodIssues(issues) {
+  const details = [];
+  const seen = new Set();
+  for (const issue of issues) {
+    if (issue.code === 'unrecognized_keys') {
+      for (const key of issue.keys) {
+        details.push({
+          field: [...issue.path, key].join('.'),
+          message: `Unknown field "${key}" is not allowed`,
+        });
+      }
+      continue;
+    }
+    const field = issue.path.join('.');
+    if (seen.has(field)) continue;
+    seen.add(field);
+    details.push(field ? { field, message: issue.message } : { message: issue.message });
+  }
+  return details;
+}
+
 /** Converts any thrown value into { status, code, message, details? } safe for clients. */
 export function normalizeError(err) {
   if (err instanceof AppError) {
@@ -39,8 +77,8 @@ export function normalizeError(err) {
     return {
       status: 400,
       code: 'VALIDATION_ERROR',
-      message: 'Request validation failed',
-      details: err.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+      message: 'Some fields are missing or invalid.',
+      details: formatZodIssues(err.issues),
     };
   }
   if (err?.type && BODY_PARSER_ERRORS[err.type]) {
@@ -55,15 +93,14 @@ export function normalizeError(err) {
       status: 400,
       code: 'VALIDATION_ERROR',
       message: 'Validation failed',
-      details: err.errors.map((item) => ({ path: item.path, message: item.message })),
+      details: err.errors.map((item) => ({ field: item.path, message: item.message })),
     };
   }
-  if (err instanceof ConnectionError) {
-    return {
-      status: 503,
-      code: 'DATABASE_UNAVAILABLE',
-      message: 'The database is temporarily unavailable',
-    };
+  if (err instanceof ConnectionError || err instanceof TimeoutError) {
+    return DATABASE_UNAVAILABLE;
+  }
+  if (err instanceof DatabaseError && TRANSIENT_PG_CODES.has(err.original?.code)) {
+    return DATABASE_UNAVAILABLE;
   }
   if (err instanceof SequelizeBaseError) {
     return {
@@ -77,10 +114,11 @@ export function normalizeError(err) {
 
 /**
  * Final Express error handler. Responds with
- *   { "error": { "code", "message", "details"? } }
- * and logs server-side failures. Internal details never reach clients in production.
+ *   { "success": false, "error": { "code", "message", "details"? } }
+ * and logs server-side failures with full detail. Clients never receive stack
+ * traces, SQL, driver messages or connection details, in any environment.
  */
-export function errorHandler({ logger, isProduction }) {
+export function errorHandler({ logger }) {
   // Express identifies error handlers by their four-argument signature.
   return (err, req, res, _next) => {
     const { status, code, message, details } = normalizeError(err);
@@ -95,12 +133,8 @@ export function errorHandler({ logger, isProduction }) {
     if (res.headersSent) return;
 
     res.status(status).json({
-      error: {
-        code,
-        message,
-        ...(details && { details }),
-        ...(!isProduction && status >= 500 && err?.message && { debug: err.message }),
-      },
+      success: false,
+      error: { code, message, ...(details && { details }) },
     });
   };
 }
