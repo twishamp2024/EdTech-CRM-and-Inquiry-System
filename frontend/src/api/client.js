@@ -29,13 +29,15 @@ async function parseBody(response) {
 }
 
 /**
- * fetch wrapper for the backend API: JSON in and out, optional Bearer token,
- * timeout, and errors normalised to ApiError. Aborting via `signal` rejects
- * with the browser's AbortError so callers can ignore cancelled requests.
+ * fetch wrapper for the backend API: JSON in and out, timeout, and errors
+ * normalised to ApiError. Admin authentication is an HttpOnly cookie set by
+ * the API, so it is sent automatically (`credentials: 'include'`) and is
+ * never readable from JavaScript. Aborting via `signal` rejects with the
+ * browser's AbortError so callers can ignore cancelled requests.
  */
 export async function apiRequest(
   path,
-  { method = 'GET', body, token, signal, timeoutMs = DEFAULT_TIMEOUT_MS, baseUrl } = {},
+  { method = 'GET', body, signal, timeoutMs = DEFAULT_TIMEOUT_MS, baseUrl } = {},
 ) {
   const controller = new AbortController();
   let timedOut = false;
@@ -49,7 +51,6 @@ export async function apiRequest(
 
   const headers = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (token) headers.Authorization = `Bearer ${token}`;
 
   let response;
   try {
@@ -57,6 +58,7 @@ export async function apiRequest(
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: 'include',
       signal: controller.signal,
     });
   } catch (err) {

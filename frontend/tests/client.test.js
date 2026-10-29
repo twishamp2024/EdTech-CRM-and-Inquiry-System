@@ -46,12 +46,12 @@ describe('apiRequest', () => {
     expect(init.headers.Authorization).toBeUndefined();
   });
 
-  it('adds a Bearer token when given one', async () => {
+  it('sends cookies so the HttpOnly admin session reaches the API', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}));
     vi.stubGlobal('fetch', fetchMock);
 
-    await apiRequest('/secure', { token: 'abc.def.ghi' });
-    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer abc.def.ghi');
+    await apiRequest('/auth/me');
+    expect(fetchMock.mock.calls[0][1].credentials).toBe('include');
   });
 
   it('turns the backend error envelope into an ApiError', async () => {
