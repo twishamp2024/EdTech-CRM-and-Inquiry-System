@@ -1,6 +1,6 @@
 # Implementation Plan — EdTech CRM & Inquiry Management System
 
-Status: **Stage 6 (admin dashboard and inquiry management) complete. All mandatory features are implemented.** Next: deployment (Phase 8: Vercel `/api` rewrite, `render.yaml`, Supabase) and CI (7.6).
+Status: **All mandatory features implemented and audited (stage 8).** Remaining: deployment config that needs the Render URL, a Supabase run, CI.
 Design details: [ARCHITECTURE.md](ARCHITECTURE.md). Requirement mapping: [REQUIREMENTS_TRACEABILITY.md](REQUIREMENTS_TRACEABILITY.md).
 
 ---
@@ -17,6 +17,32 @@ Design details: [ARCHITECTURE.md](ARCHITECTURE.md). Requirement mapping: [REQUIR
 | 6 | Admin login & dashboard | **Done** |
 | 7 | Tests & quality gates | Ongoing: suites exist for everything built so far; CI not set up |
 | 8 | Documentation & deployment | README covers stage 2; deployment not started |
+
+### Stage 9 (submission preparation) verification log (2026-10-30)
+
+| Check | Result |
+|-------|--------|
+| Backend tests / integration (isolated PGlite) | 515 passed, 5 skipped, 0 failed / 5 of 5 |
+| Frontend tests / build | 116 passed / pass |
+| Lint, Prettier, `npm audit` | pass / pass / 0 |
+| Render-like run (exact `render.yaml` build from a clean copy, backend without devDependencies, `PORT=10000`) | SPA routes, assets, health, API 404s, public submit, login, data, stats: all as expected |
+| README | all 23 `npm run` commands, file links and anchors verified |
+| Added | same-origin serving (`SERVE_FRONTEND`), `render.yaml`, `FRONTEND_URL` → `RENDER_EXTERNAL_URL` default, `.gitignore` `.env*` / `*.key`, full README |
+
+### Stage 8 (audit) verification log (2026-10-30)
+
+| Check | Result |
+|-------|--------|
+| `backend: npm run lint` / `format:check` | pass / pass |
+| `backend: npm test` | **499 tests: 494 passed, 5 skipped** (`tests/integration` without `TEST_DATABASE_URL`), 0 failed |
+| `backend: tests/integration` with `TEST_DATABASE_URL` → isolated PGlite server | **5 / 5 passed** |
+| `backend: tests/integration` against Supabase | **not run** (no credentials, B1) |
+| `frontend: npm run lint` / `format:check` / `npm test` / `npm run build` | pass / pass / **116 passed** / pass, no warnings |
+| `npm audit` (both, including dev dependencies) | 0 vulnerabilities |
+| Secrets / Git hygiene | 147 tracked files; no `.env`, keys or credentials, in the tree or in history |
+| API probes (22 attacker-style requests) | all handled safely |
+| Browser on the production build with production headers | login, dashboard, chart, status update, public form; 0 CSP violations |
+| Fixes | frontend CSP/HSTS/COOP; production `TRUST_PROXY=0` warning; route-protection regression test; `requireRole` middleware named; `MEMORY_DB_PORT` documented; stale docs updated |
 
 ### Stage 6 verification log (2026-10-30)
 

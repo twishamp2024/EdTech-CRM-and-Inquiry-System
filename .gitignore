@@ -3,10 +3,9 @@ node_modules/
 .pnp
 .pnp.js
 
-# Environment variables
+# Environment variables (real values never belong in Git)
 .env
-.env.local
-.env.*.local
+.env.*
 *.env
 
 # Production build outputs
@@ -36,6 +35,9 @@ coverage/
 
 # Keep committed example env files
 !.env.example
+
+# Private keys (the public Supabase CA certificate may be committed)
+*.key
 
 # Tooling caches
 .vite/

@@ -93,23 +93,27 @@ const serverShape = {
   AUTH_COOKIE_SAMESITE: z.enum(COOKIE_SAME_SITE_VALUES).default('strict'),
   LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1000).default(5),
   LOGIN_RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
-  FRONTEND_URL: z.string({ error: 'FRONTEND_URL is required' }).transform((value, ctx) => {
-    const origins = [];
-    for (const entry of parseOrigins(value)) {
-      try {
-        origins.push(toOrigin(entry));
-      } catch {
-        ctx.addIssue({ code: 'custom', message: `"${entry}" is not a valid http(s) URL` });
+  FRONTEND_URL: z
+    .string({ error: 'FRONTEND_URL is required (on Render it defaults to RENDER_EXTERNAL_URL)' })
+    .transform((value, ctx) => {
+      const origins = [];
+      for (const entry of parseOrigins(value)) {
+        try {
+          origins.push(toOrigin(entry));
+        } catch {
+          ctx.addIssue({ code: 'custom', message: `"${entry}" is not a valid http(s) URL` });
+          return z.NEVER;
+        }
+      }
+      if (origins.length === 0) {
+        ctx.addIssue({ code: 'custom', message: 'FRONTEND_URL must list at least one origin' });
         return z.NEVER;
       }
-    }
-    if (origins.length === 0) {
-      ctx.addIssue({ code: 'custom', message: 'FRONTEND_URL must list at least one origin' });
-      return z.NEVER;
-    }
-    return origins;
-  }),
+      return origins;
+    }),
   TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(0),
+  SERVE_FRONTEND: booleanString.default(false),
+  FRONTEND_DIST_DIR: z.string().optional(),
   INQUIRY_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(10_000).default(10),
   INQUIRY_RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
   INQUIRY_DUPLICATE_WINDOW_MINUTES: z.coerce.number().int().min(0).max(1440).default(10),
@@ -197,12 +201,35 @@ function buildAuthCookieConfig(env, issues) {
   };
 }
 
+/**
+ * Same-origin deployment: the API also serves the built React app
+ * (frontend/dist) so pages and /api share one origin.
+ */
+function buildFrontendConfig(env, baseDir, issues) {
+  const distDir = path.resolve(baseDir, env.FRONTEND_DIST_DIR ?? '../frontend/dist');
+  if (env.SERVE_FRONTEND && !fs.existsSync(path.join(distDir, 'index.html'))) {
+    issues.push(
+      `SERVE_FRONTEND: no index.html in ${distDir}; build the frontend first (npm run build --prefix frontend)`,
+    );
+  }
+  return { serve: env.SERVE_FRONTEND, distDir };
+}
+
+const isSet = (value) => typeof value === 'string' && value.trim() !== '';
+
 /** Full configuration for the API server. Throws ConfigError listing every problem. */
 export function loadConfig(rawEnv = process.env, { baseDir = BACKEND_ROOT } = {}) {
-  const env = parse(serverShape, rawEnv);
+  // Render provides the service's public URL; it is the frontend origin when
+  // the API serves the SPA itself.
+  const withDefaults =
+    !isSet(rawEnv.FRONTEND_URL) && isSet(rawEnv.RENDER_EXTERNAL_URL)
+      ? { ...rawEnv, FRONTEND_URL: rawEnv.RENDER_EXTERNAL_URL }
+      : rawEnv;
+  const env = parse(serverShape, withDefaults);
   const issues = [];
   const database = buildDatabaseConfig(env, baseDir, issues);
   const cookie = buildAuthCookieConfig(env, issues);
+  const frontend = buildFrontendConfig(env, baseDir, issues);
   if (issues.length) throw new ConfigError(issues);
 
   return Object.freeze({
@@ -227,6 +254,7 @@ export function loadConfig(rawEnv = process.env, { baseDir = BACKEND_ROOT } = {}
     },
     frontendOrigins: env.FRONTEND_URL,
     trustProxy: env.TRUST_PROXY,
+    frontend,
     inquiries: {
       rateLimit: {
         max: env.INQUIRY_RATE_LIMIT_MAX,

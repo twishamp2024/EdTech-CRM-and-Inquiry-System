@@ -26,7 +26,7 @@ export function createAuthenticate({ authService, cookie }) {
 
 /** 403 unless the authenticated identity (from the server, not the request) has one of `roles`. */
 export function requireRole(...roles) {
-  return (req, _res, next) => {
+  return function requireRoleMiddleware(req, _res, next) {
     if (!req.auth) {
       return next(new AppError(401, 'AUTH_REQUIRED', 'Please sign in to continue.'));
     }

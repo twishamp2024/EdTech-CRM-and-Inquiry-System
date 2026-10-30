@@ -1,5 +1,6 @@
 import { createApp } from './app.js';
 import { createDatabase } from './config/database.js';
+import { collectStartupWarnings } from './config/startupWarnings.js';
 import { ConfigError, loadConfig, loadDotenv } from './config/env.js';
 import { createAdminRepository } from './services/admin.repository.js';
 import { createAuthService } from './services/auth.service.js';
@@ -30,15 +31,7 @@ async function main() {
     format: config.isProduction ? 'json' : 'pretty',
   });
 
-  if (config.database.sslMode === 'require') {
-    logger.warn(
-      'DATABASE_SSL_MODE=require: traffic is encrypted but the server certificate is NOT verified',
-    );
-  } else if (config.database.sslMode === 'verify-full' && !config.database.sslCa) {
-    logger.warn(
-      "No DATABASE_SSL_CA[_PATH] set; verification uses system CAs, which do not include Supabase's root CA",
-    );
-  }
+  for (const warning of collectStartupWarnings(config)) logger.warn(warning);
 
   const db = createDatabase(config.database, { logger, logQueries: config.logLevel === 'debug' });
 

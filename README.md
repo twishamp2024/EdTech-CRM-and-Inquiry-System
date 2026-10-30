@@ -1,376 +1,469 @@
 # EdTech CRM & Inquiry Management System
 
-An EdTech CRM and inquiry management system designed for prospective student inquiries and administrative lead management.
+A CRM for an education provider. Parents, students and schools submit inquiries (scholarships, concerts, admissions, general questions) through a public form. Staff sign in to a protected dashboard to search, filter, review, export and update those inquiries.
 
-> **Status:** all mandatory features are implemented and tested: the public inquiry form, custom admin authentication (bcrypt + JWT in an HttpOnly cookie), and the admin dashboard with server-side filters, search, pagination and status updates. Remaining: deployment config (Vercel/Render) and CI. See the [implementation plan](docs/IMPLEMENTATION_PLAN.md).
+- **Frontend:** React 19 + Vite 8 (JavaScript), React Router, Axios, React Hook Form + Zod, Lucide icons
+- **Backend:** Node.js + Express 5, Sequelize 6 with the `pg` driver, Zod, bcrypt, jsonwebtoken
+- **Database:** Supabase PostgreSQL. Supabase is used **only as managed PostgreSQL**: no Supabase Auth, no Supabase client, and the browser never talks to the database.
+- **Authentication:** custom bcrypt password hashes plus a JWT carried in an HttpOnly cookie
+- **Deployment:** a single Render web service (`render.yaml`) that serves the API and the built React app from one origin
 
-## Project Structure & Documentation
+> **Status:** all mandatory features are implemented and tested. Nothing has been deployed yet, and nothing has been tested against a real Supabase project (that needs your credentials; see [Supabase setup](#3-supabase-setup)).
 
-Detailed project architecture, implementation plans, and requirement matrices can be found in the [`docs/`](./docs) folder:
-
-- [System Architecture](docs/ARCHITECTURE.md)
-- [Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
-- [Requirements Traceability Matrix](docs/REQUIREMENTS_TRACEABILITY.md)
-
-```
-backend/     Express 5 API, Sequelize models, database scripts, tests
-frontend/    React + Vite single-page app
-schema.sql   Reproducible initial PostgreSQL schema (source of truth)
-.env.example Backend configuration template (copy to backend/.env)
-docs/        Architecture, plan, traceability
-```
-
-## Tech Stack Overview
-
-- **Frontend**: React + Vite SPA
-- **Backend API**: Node.js + Express, Sequelize ORM, Zod, bcrypt, jsonwebtoken
-- **Database**: Supabase PostgreSQL
-- **Testing**: Vitest, Supertest
-- **Deployment**: Vercel (Frontend), Render (Backend)
-
-Supabase is used only as managed PostgreSQL. Admin authentication is custom (bcrypt + JWT in an HttpOnly cookie); Supabase Auth and the Supabase JS client are not used, and the frontend never connects to the database.
+More detail: [Architecture](docs/ARCHITECTURE.md) · [Implementation plan](docs/IMPLEMENTATION_PLAN.md) · [Requirements traceability](docs/REQUIREMENTS_TRACEABILITY.md)
 
 ---
 
-## Prerequisites
+## Contents
 
-- **Node.js ≥ 22.12** (24 LTS recommended; see `.nvmrc`) and npm
-- A **Supabase** project (free tier is fine)
+1. [Features](#1-features)
+2. [Architecture](#2-architecture)
+3. [Supabase setup](#3-supabase-setup)
+4. [Local installation and running](#4-local-installation-and-running)
+5. [Environment variables](#5-environment-variables)
+6. [Admin accounts](#6-admin-accounts)
+7. [API reference](#7-api-reference)
+8. [Authentication: how it works and how to test it](#8-authentication-how-it-works-and-how-to-test-it)
+9. [Tests, lint and builds](#9-tests-lint-and-builds)
+10. [Deployment](#10-deployment)
+11. [Security notes](#11-security-notes)
+12. [Known limitations](#12-known-limitations)
+13. [Troubleshooting](#13-troubleshooting)
 
-## 1. Set up the database (Supabase)
+---
 
-1. Create a project at [supabase.com](https://supabase.com) and note the database password.
-2. **Connection string:** in the project's **Connect** dialog (or *Project Settings → Database*), copy the **Session pooler** URI. It looks like:
+## 1. Features
+
+### Mandatory
+
+| Feature | Where |
+|---------|-------|
+| Public inquiry form: User Type (Parent / Student / School), Category (Scholarship / Concert / Admission / General Query), Name, Email, Phone, Message | `/` · `POST /api/inquiries` |
+| Validation in the browser **and** on the server, with field-level messages | `frontend/src/validation`, `backend/src/validators` |
+| Submissions stored in PostgreSQL through Sequelize, status `New` by default | `backend/src/services/inquiry.service.js`, `schema.sql` |
+| Custom admin authentication: bcrypt (cost 12) + JWT (HS256, explicit expiry, issuer and audience) in an HttpOnly cookie | `/login` · `/api/auth/*` |
+| Protected admin dashboard and APIs | `/admin/dashboard` · `/api/inquiries` (except the public `POST`) |
+| Table with Name, Phone, Email, User Type, Category, Date, Status | dashboard |
+| Filter by Category, filter by User Type, search by name or phone, all combinable | dashboard · `GET /api/inquiries` |
+
+### Additional
+
+- **Status management** (New / In Progress / Resolved) from the table, with confirmation messages.
+- **Pagination** on the server (20 per page by default), plus sorting by date or name.
+- **Summary cards** (total, New, In progress, Resolved) and a **category bar chart**, counted in the database. Clicking a card or a bar filters the table.
+- **CSV export** of the current filtered results. Values are escaped, spreadsheet formulas are neutralized, and only inquiry fields are included.
+- **Filter chips** with per-filter remove and Clear all. The view (filters, search, page, sort) lives in the URL, so it survives a reload and can be shared.
+- **Duplicate protection:** an identical submission within 10 minutes returns the existing inquiry instead of storing a copy.
+- **Rate limiting** on the public form and on failed sign-ins.
+- **Accessibility and responsiveness:** labelled controls, visible focus styles, a skip link, live status messages, light and dark themes, phone layouts, and a table that scrolls with a sticky name column.
+- **Local mode without Supabase:** `npm run dev:memory` runs the real API on an in-memory PostgreSQL (PGlite) for trying the app.
+
+---
+
+## 2. Architecture
+
+```
+Browser ──HTTPS──▶ Render web service (Node.js, Express 5)                ──TLS──▶ Supabase PostgreSQL
+                   ├─ /api/*   JSON API (Helmet, CORS allow-list, Zod,              (session pooler,
+                   │           rate limits, cookie JWT auth, CSRF origin check)      certificate verified)
+                   └─ /*       built React app (frontend/dist) + SPA fallback
+```
+
+In production, one service serves both the pages and the API, so they share an origin. The session cookie is first-party with `SameSite=Strict`, and no cross-site CORS is involved. In development, Vite serves the React app on port 5173 and proxies `/api` to Express on port 4000, which gives the same origin model.
+
+### Repository structure
+
+```
+├── backend/
+│   ├── src/
+│   │   ├── app.js              Express app (middleware, /api router, optional React app serving)
+│   │   ├── server.js           startup: config → DB connection (with retries) → listen on PORT → graceful shutdown
+│   │   ├── config/             env.js (Zod-validated config), database.js (Sequelize, TLS), security and startup warnings
+│   │   ├── models/             Admin, Inquiry (explicit camelCase ↔ snake_case mappings)
+│   │   ├── routes/ controllers/ services/   health, auth, inquiries (list, stats, export, status)
+│   │   ├── middleware/         authenticate, requireTrustedOrigin (CSRF), rate limiters, validation, errors
+│   │   ├── validators/         Zod request schemas
+│   │   ├── frontend/           serves frontend/dist when SERVE_FRONTEND=true
+│   │   └── utils/              jwt, password (bcrypt), cookies, CSV, query builder, logger
+│   ├── scripts/                db-migrate, db-check, createAdmin, dev-memory
+│   ├── tests/                  unit, api, schema, database (PGlite), integration (real PostgreSQL)
+│   └── certs/README.md         where to put the Supabase CA certificate
+├── frontend/
+│   ├── src/                    pages (form, login, dashboard), components, auth, api (Axios), hooks, validation
+│   ├── tests/                  Vitest + Testing Library
+│   ├── vite.config.js          dev proxy, build chunking, preview with production headers
+│   └── vercel.json             security headers + SPA rewrite (optional Vercel deployment)
+├── schema.sql                  database schema (tables, constraints, indexes, trigger, RLS)
+├── render.yaml                 Render Blueprint (single same-origin web service)
+├── .env.example                backend configuration template
+└── docs/                       architecture, implementation plan, requirements traceability
+```
+
+### Data model (`schema.sql`)
+
+- **`admins`**: `id` uuid PK, `email` unique (stored lower-case), `password_hash` (a CHECK accepts only bcrypt hashes), `created_at`.
+- **`inquiries`**: `id`, `name`, `email`, `phone` (text), `user_type` and `category` (CHECK allow-lists), `message`, `status` (CHECK New / In Progress / Resolved, default New), `created_at`, `updated_at` (kept current by a trigger).
+- **Indexes:** creation date, category + date, and user type + date.
+- **Row Level Security** is enabled with no policies, so Supabase's public REST API cannot read either table. The backend connects as the table owner and is unaffected.
+
+---
+
+## 3. Supabase setup
+
+1. Create a project at [supabase.com](https://supabase.com) and keep the database password.
+2. **Connection string:** in **Connect** (or *Project Settings → Database*), copy the **Session pooler** URI:
    ```
    postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
    ```
-   Use the pooler, not the direct `db.<ref>.supabase.co` host, which is IPv6-only on most plans. Do not add `?sslmode=…`; TLS is configured separately (step 3).
-3. **CA certificate:** *Project Settings → Database → SSL Configuration → Download certificate*, and save it as `backend/certs/supabase-ca.crt`. Supabase signs its certificates with its own root CA, so the backend needs this file to verify the server (`DATABASE_SSL_MODE=verify-full`, the default). The certificate is public, so it may be committed.
-4. **Create the tables.** Either:
-   - paste the contents of [`schema.sql`](schema.sql) into the Supabase **SQL Editor** and run it, or
-   - run `npm run db:migrate` from `backend/` after step 2 below.
+   Use the pooler, not `db.<ref>.supabase.co`, which is IPv6-only on most plans. Do not add `?sslmode=…`; TLS is configured separately.
+3. **CA certificate:** go to *Project Settings → Database → SSL Configuration → Download certificate*. Supabase signs its certificates with its own root CA, so the backend needs this file to verify the server.
+   - Locally: save it as `backend/certs/supabase-ca.crt`.
+   - On Render: paste its contents into the `DATABASE_SSL_CA` environment variable.
+4. **Create the tables** by running `schema.sql`, either way:
+   - **SQL editor:** open *SQL Editor → New query*, paste the whole of [`schema.sql`](schema.sql), and click **Run**.
+   - **From your machine,** after configuring `backend/.env` (next section):
+     ```bash
+     npm run db:migrate --prefix backend
+     ```
 
-   `schema.sql` is idempotent and runs in a transaction, so running it twice is safe.
+   `schema.sql` runs in a transaction and is safe to run more than once.
+5. Check that the tables match the application (read-only):
+   ```bash
+   npm run db:check --prefix backend
+   ```
 
-## 2. Configure and run the backend
+---
+
+## 4. Local installation and running
+
+**Prerequisites:** Node.js **22.22+ or 24** (`.nvmrc` says 24) and npm. For the full setup you also need a Supabase project; to try the app without one, see [Option B](#option-b-no-supabase-in-memory-database).
 
 ```bash
-cd backend
-npm install
-cp ../.env.example .env
+git clone https://github.com/twishamp2024/EdTech-CRM-and-Inquiry-System.git
+cd EdTech-CRM-and-Inquiry-System
+npm ci --prefix backend
+npm ci --prefix frontend
 ```
 
-Edit `backend/.env`:
+### Option A: with Supabase
 
-| Variable | What to set |
-|----------|-------------|
-| `DATABASE_URL` | Session pooler URI from step 1.2 |
-| `DATABASE_SSL_CA_PATH` | `./certs/supabase-ca.crt` (default in the example) |
-| `JWT_SECRET` | A random string of at least 32 characters (command below). The server refuses the placeholder. |
-| `FRONTEND_URL` | `http://localhost:5173` for local development |
+```bash
+cp .env.example backend/.env
+```
 
-Generate a JWT secret:
+Edit `backend/.env`: set `DATABASE_URL` (step 3.2) and `JWT_SECRET` (generate one as below), and keep `DATABASE_SSL_CA_PATH=./certs/supabase-ca.crt` (step 3.3).
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
-Then:
-
 ```bash
-npm run db:migrate   # apply schema.sql (skip if you used the SQL editor)
-npm run db:check     # verify tables match the models and RLS is enabled
-npm run admin:create # create your admin account (prompts; see Admin accounts)
-npm run dev          # API on http://localhost:4000, restarts on file changes
+npm run db:migrate --prefix backend
+npm run admin:create --prefix backend
+npm run dev --prefix backend
 ```
 
-Check it:
+In a second terminal:
 
 ```bash
-curl http://localhost:4000/api/health
-curl http://localhost:4000/api/health/db
+npm run dev --prefix frontend
 ```
 
-The first returns `{"status":"ok",…}`. The second returns `{"status":"ok","database":"up",…}`, or a `503` if the database is unreachable.
+Open **http://localhost:5173**. The form is at `/`, sign-in at `/login` and the dashboard at `/admin/dashboard`. The API runs on http://localhost:4000, and Vite proxies `/api` to it.
 
-### Backend scripts
+### Option B: no Supabase (in-memory database)
 
-| Script | Purpose |
-|--------|---------|
-| `npm run dev` | Start with `node --watch` (development) |
-| `npm start` | Start for production |
-| `npm test` | Unit, API and schema tests (no database needed) |
-| `npm run test:integration` | Tests against a real database (needs `TEST_DATABASE_URL`) |
-| `npm run lint` / `npm run format:check` | ESLint / Prettier |
-| `npm run db:migrate` | Apply `schema.sql` to `DATABASE_URL` |
-| `npm run db:check` | Read-only check that the schema matches the models and RLS is enabled |
-| `npm run admin:create` | Create an admin account (see [Admin accounts](#admin-accounts)) |
-| `npm run dev:memory` | Development only: API + in-memory PostgreSQL, no Supabase needed (see [Try the app locally](#try-the-app-locally-without-supabase)) |
-
-### Startup behaviour
-
-- Configuration is validated at startup. Missing or invalid variables are listed together and the process exits with code 1.
-- The server connects to the database before accepting traffic. Transient errors are retried (`DATABASE_CONNECT_RETRIES`, default 5, with backoff). Errors retrying cannot fix (wrong password, certificate problems, unknown database) fail immediately. Every failure is logged with a hint, and credentials are never logged.
-- `SIGTERM`/`SIGINT` trigger a graceful shutdown.
-
-## API
-
-| Method | Path | Access |
-|--------|------|--------|
-| `GET` | `/api/health`, `/api/health/db` | public |
-| `POST` | `/api/inquiries` | public |
-| `POST` | `/api/auth/login` | public (origin-checked, rate-limited) |
-| `POST` | `/api/auth/logout` | origin-checked |
-| `GET` | `/api/auth/me` | admin session |
-| `GET` | `/api/inquiries?category=&userType=&search=&page=&pageSize=&sortBy=&sortDir=` | admin session; server-side filters (combined with AND), case-insensitive name/phone search (phone also ignores spaces and dashes), whitelisted sort, 20 per page by default (max 100); response `meta` has `total`, `totalPages`, `hasNextPage`, `hasPreviousPage` |
-| `GET` | `/api/inquiries/:id` | admin session |
-| `PATCH` | `/api/inquiries/:id/status` | admin session, origin-checked; body `{"status":"New"|"In Progress"|"Resolved"}` |
-
-### `POST /api/inquiries` (public)
-
-No authentication. JSON body with exactly these fields:
-
-| Field | Rules |
-|-------|-------|
-| `name` | required, 2–100 characters, must include a letter |
-| `email` | required, valid address, ≤ 254 characters (stored lower-cased) |
-| `phone` | required, any country: optional leading `+`, digits, spaces, `-`, `(`, `)`; 7–15 digits; ≤ 20 characters |
-| `userType` | `Parent`, `Student` or `School` |
-| `category` | `Scholarship`, `Concert`, `Admission` or `General Query` |
-| `message` | required, 10–2000 characters |
-
-All strings are trimmed. Any other field (for example `status`) is rejected.
+For trying the app only. Data disappears when the process stops, and the command refuses to run with `NODE_ENV=production`.
 
 ```bash
-curl -i http://localhost:4000/api/inquiries \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Meera Iyer","email":"meera@example.com","phone":"+44 20 7946 0958","userType":"Parent","category":"Concert","message":"Are concert tickets open to parents?"}'
+npm run dev:memory --prefix backend
 ```
 
-| Response | When |
-|----------|------|
-| `201` `{"success":true,"message":"Thank you! Your inquiry has been received.","data":{"id":"…","duplicate":false}}` | stored with status `New` |
-| `200` `{…,"data":{"id":"<existing id>","duplicate":true}}` | the same inquiry was already received in the last `INQUIRY_DUPLICATE_WINDOW_MINUTES` (default 10) |
-| `400` `{"success":false,"error":{"code":"VALIDATION_ERROR","details":[{"field":"email","message":"…"}]}}` | invalid or missing fields, malformed JSON, unknown fields |
-| `413` / `415` | body over 20 kb / not `application/json` |
-| `429` `RATE_LIMITED` | more than `INQUIRY_RATE_LIMIT_MAX` (default 10) submissions per IP per `INQUIRY_RATE_LIMIT_WINDOW_MINUTES` (default 15) |
-| `503` / `500` | database unavailable or failed; nothing was saved |
-
-## 3. Run the frontend
+In a second terminal, create an admin in that database:
 
 ```bash
-cd frontend
-npm install
-npm run dev          # http://localhost:5173
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/postgres DATABASE_SSL_MODE=disable npm run admin:create --prefix backend
 ```
 
-The app calls same-origin `/api/...`, and in development Vite proxies those requests to `http://localhost:4000` (override with `DEV_API_PROXY_TARGET` in `frontend/.env.local`). Because the browser only ever talks to `localhost:5173`, the admin session cookie is first-party, exactly as it will be behind the Vercel rewrite in production.
-
-| Route | Page | Access |
-|-------|------|--------|
-| `/` | Public inquiry form | everyone |
-| `/login` | Admin sign-in | everyone (signed-in admins are sent to the dashboard) |
-| `/admin/dashboard` | Inquiry table with search (name or phone), Category and User Type filters, reset, sorting, pagination and status updates | signed-in admins; others are redirected to `/login` |
-
-| Script | Purpose |
-|--------|---------|
-| `npm run dev` | Vite dev server with `/api` proxy |
-| `npm run build` / `npm run preview` | Production build / serve it locally |
-| `npm test` | Vitest + Testing Library |
-| `npm run lint` / `npm run format:check` | ESLint / Prettier |
-
-Stack: React 19, React Router 8, Axios, React Hook Form + Zod, Lucide icons. Frontend Node requirement: `^22.22.0 || >=24` (React Router 8).
-
-## Try the app locally without Supabase
-
-`npm run dev:memory` (in `backend/`) runs the real API against an **in-memory PostgreSQL** (PGlite) with `schema.sql` applied. Nothing is persisted, and it refuses to run with `NODE_ENV=production`. Use it to click through the app before your Supabase project is set up.
+In a third terminal:
 
 ```bash
-# Terminal 1 — API + in-memory database (http://localhost:4000)
-cd backend && npm install && npm run dev:memory
+npm run dev --prefix frontend
 ```
+
+### Same-origin production build locally
+
+This serves the built app from Express exactly as on Render. It needs a configured `backend/.env`.
 
 ```bash
-# Terminal 2 — create an admin in that database (prompts for email and password)
-cd backend && DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/postgres DATABASE_SSL_MODE=disable npm run admin:create
+npm run build --prefix frontend
+SERVE_FRONTEND=true FRONTEND_URL=http://localhost:4000 npm start --prefix backend
 ```
+
+Then open http://localhost:4000.
+
+---
+
+## 5. Environment variables
+
+The backend reads `backend/.env` (template: [`.env.example`](.env.example)) and validates it at startup. Missing or invalid values are listed together, and the process exits instead of running half-configured.
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `DATABASE_URL` | **yes** | — | Supabase session-pooler connection string |
+| `DATABASE_SSL_MODE` | no | `verify-full` | `verify-full` (certificate checked), `require` (encrypted, not verified; logs a warning), `disable` (local only; refused in production) |
+| `DATABASE_SSL_CA_PATH` / `DATABASE_SSL_CA` | for Supabase | — | Supabase CA certificate as a file path or inline PEM |
+| `JWT_SECRET` | **yes** | — | ≥ 32 random characters; the `.env.example` placeholder is refused |
+| `JWT_EXPIRES_IN` | no | `1h` | session length (`15m`, `1h`, `7d`…) |
+| `JWT_ISSUER` / `JWT_AUDIENCE` | no | `edtech-crm-api` / `edtech-crm-admin` | checked on every request |
+| `FRONTEND_URL` | **yes**, except on Render | `RENDER_EXTERNAL_URL` | exact browser origin(s), comma-separated; used for CORS and the CSRF origin check |
+| `PORT` | no | `4000` | hosting platforms set this |
+| `NODE_ENV` | no | `development` | `production` enables Secure cookies, JSON logs and strict TLS |
+| `SERVE_FRONTEND` / `FRONTEND_DIST_DIR` | no | `false` / `../frontend/dist` | serve the built React app from the API (same-origin deployment) |
+| `TRUST_PROXY` | no | `0` | proxies in front of Express (`1` on Render); a warning is logged if left at 0 in production |
+| `BCRYPT_SALT_ROUNDS` | no | `12` | 10–15 |
+| `AUTH_COOKIE_SECURE` / `AUTH_COOKIE_SAMESITE` | no | `true` in production / `strict` | Secure cannot be turned off in production |
+| `LOGIN_RATE_LIMIT_MAX` / `…_WINDOW_MINUTES` | no | `5` / `15` | failed sign-ins per IP |
+| `INQUIRY_RATE_LIMIT_MAX` / `…_WINDOW_MINUTES` | no | `10` / `15` | public submissions per IP |
+| `INQUIRY_DUPLICATE_WINDOW_MINUTES` | no | `10` | identical submissions within this window are not stored twice (`0` disables) |
+| `LOG_LEVEL`, `DATABASE_POOL_MAX`, `DATABASE_CONNECT_RETRIES` | no | `info`, `5`, `5` | operational tuning |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | no | — | only for non-interactive `admin:create`; never set on the running service |
+| `TEST_DATABASE_URL` | tests only | — | disposable database for `npm run test:integration` |
+
+Frontend ([`frontend/.env.example`](frontend/.env.example)): `VITE_API_BASE_URL` stays empty for same-origin `/api`, and `DEV_API_PROXY_TARGET` sets the dev proxy target (default `http://localhost:4000`). The frontend holds **no** database or secret configuration.
+
+---
+
+## 6. Admin accounts
+
+There is no sign-up page and no default admin. Create admins with the bootstrap script:
 
 ```bash
-# Terminal 3 — frontend (http://localhost:5173)
-cd frontend && npm install && npm run dev
+npm run admin:create --prefix backend
 ```
 
-**Public submission flow**
-1. Open http://localhost:5173 and press **Send inquiry** with the form empty. Every field shows its own error, the first one is focused, and nothing is sent.
-2. Fill in all fields and submit. The button changes to **Sending…** and the form is locked, so a second request cannot be sent.
-3. **Thank you — your inquiry has been received** appears only after the API answers `201`, with a reference (the first 8 characters of the stored id). Submitting the identical inquiry again within 10 minutes shows **We already have this inquiry**.
-4. To see a failure, stop terminal 1 and submit. You get **Your inquiry was not sent**, and your text stays in the form.
-
-**Login flow**
-1. Open http://localhost:5173/admin/dashboard. You are sent to `/login` with "Please sign in to continue."
-2. A wrong password gives **Incorrect email or password.** (the same message for an unknown email). The password field is cleared and focused. Six failures in 15 minutes give the rate-limit message.
-3. Correct credentials take you to `/admin/dashboard`. In DevTools, *Application → Cookies* shows `edtech_admin_session` as **HttpOnly**, and `document.cookie`, `localStorage` and `sessionStorage` are empty.
-4. Reload the page: the session is restored through `GET /api/auth/me`.
-5. **Sign out** calls `POST /api/auth/logout` and returns you to `/login` with "You have signed out." Opening `/admin/dashboard` again redirects to `/login`.
-
-**Dashboard flow** (submit a few inquiries first, through the form or `curl`):
-1. The table lists the inquiries newest first, 20 per page, with "Showing 1–n of N".
-2. Pick a **Category**, then a **User type**: each change reloads from the API, and the URL records the filters.
-3. Type part of a name (any case), or a phone number with or without spaces and dashes, into **Search**. Results update after you pause typing.
-4. **Reset filters** clears everything. With more than 20 inquiries, **Next** and **Previous** page through them, and the filters are kept.
-5. Change a row's **Status**. The select shows a spinner, then a confirmation message appears; reload the page to see that the change was saved.
-
-In the in-memory mode the JWT secret is random per run, so restarting the API ends every session.
-
-## Testing
+- It asks for the email and the password; the password is hidden and asked twice.
+- **Password rules:** at least 12 characters, at most 72 bytes, at least 5 different characters, not a common password, and not containing the email name.
+- Only a bcrypt hash (cost 12) is stored. Neither the password nor the hash is ever printed.
+- A duplicate email (in any letter case) fails with exit code 1.
+- **Non-interactive use** (for example in a Render shell) takes `ADMIN_EMAIL` plus `ADMIN_PASSWORD`, or reads the password as one line from stdin. A `--password` argument is refused, because arguments are visible in shell history.
 
 ```bash
-cd backend && npm test
-cd frontend && npm test
+read -rs ADMIN_PASSWORD && export ADMIN_PASSWORD && ADMIN_EMAIL=you@school.org npm run admin:create --prefix backend; unset ADMIN_PASSWORD
 ```
 
-- **Frontend:** the real router, auth provider, forms and validation with the API modules mocked. Covers field validation and errors, loading and double-submit prevention, success only on confirmed saves, failure messages, the protected-route redirect, session restore, login and logout, the 401 → sign-in flow, no token in web storage, and an Axios client test with a fake adapter. `tests/validation.test.js` runs the same inputs through the frontend and backend schemas and fails if they disagree.
-- **Backend:** unit tests (config, TLS options, retry logic, models, error handling, inquiry validation), Supertest API tests with stubbed services (health, CORS, headers, body parsing, 404, inquiry submission, rate limiting, database-failure responses), **persistence tests** that run the real app, Sequelize and `pg` against an in-process PGlite PostgreSQL over TCP, and **schema tests** that execute `schema.sql` in [PGlite](https://pglite.dev), a real PostgreSQL engine compiled to WebAssembly. These check constraints, defaults, the `updated_at` trigger, indexes and RLS without any database server. SQLite is not used anywhere.
-- **Integration tests** run against a real PostgreSQL database and are **skipped** unless `TEST_DATABASE_URL` is set. Use a separate Supabase project or a disposable database, never production. They apply `schema.sql`, and every row they write is rolled back.
-  ```bash
-  TEST_DATABASE_URL='postgresql://…' npm run test:integration
-  ```
+---
 
-## Admin accounts
+## 7. API reference
 
-There is no sign-up page and no default admin. Create one with the bootstrap script (from `backend/`, with `DATABASE_URL` configured):
+All responses are JSON unless noted. Errors look like `{ "success": false, "error": { "code", "message", "details"? } }`, and `details` holds `{ field, message }` per invalid field.
 
-```bash
-npm run admin:create
-```
+| Method | Path | Access | Description |
+|--------|------|--------|-------------|
+| GET | `/api/health` | public | liveness: `{ status: "ok" }` (Render health check) |
+| GET | `/api/health/db` | public | database reachability; 503 if down |
+| POST | `/api/inquiries` | public (rate-limited) | submit an inquiry → `201 { success, message, data: { id, duplicate: false } }`; an identical recent submission → `200`, `duplicate: true` |
+| POST | `/api/auth/login` | public (rate-limited, origin-checked) | `{ email, password }` → sets the session cookie; body `{ data: { admin: { id, email, role }, expiresAt } }` |
+| POST | `/api/auth/logout` | origin-checked | revokes the token and clears the cookie |
+| GET | `/api/auth/me` | admin | current admin |
+| GET | `/api/inquiries` | admin | list: `category`, `userType`, `status`, `search` (name or phone), `page`, `pageSize` (≤ 100, default 20), `sortBy` (`createdAt`, `name`, `category`, `userType`, `status`), `sortDir` (`asc`, `desc`) → `{ data, meta: { page, pageSize, total, totalPages, hasNextPage, hasPreviousPage, … } }` |
+| GET | `/api/inquiries/stats` | admin | `{ total, byStatus, byCategory }`, counted in the database |
+| GET | `/api/inquiries/export` | admin | same filters and sort as the list → `text/csv` download (at most 5000 rows, otherwise 422) |
+| GET | `/api/inquiries/:id` | admin | one inquiry, including the message |
+| PATCH | `/api/inquiries/:id/status` | admin, origin-checked | `{ "status": "New" \| "In Progress" \| "Resolved" }` → updated inquiry |
 
-It asks for the email and the password. The password is hidden and asked twice. Rules: at least 12 characters, at most 72 bytes, at least 5 different characters, not a common password, and not containing the email name. The password is hashed with bcrypt (cost `BCRYPT_SALT_ROUNDS`, default 12), and only the hash is stored in `admins.password_hash`. The script prints the email and id, never the password or hash. A duplicate email fails with exit code 1.
+**Public form validation:**
+- every field is trimmed;
+- name: 2–100 characters, must include a letter;
+- email: valid, ≤ 254 characters, stored lower-case;
+- phone: any country, an optional leading `+`, then digits, spaces, `-` and brackets, with 7–15 digits and ≤ 20 characters;
+- message: 10–2000 characters;
+- user type and category must match the allowed values exactly;
+- any other field (for example `status`) is rejected.
 
-Non-interactive use, for example in a Render shell, reads the password from the environment or from one line on stdin. Passwords are never accepted as a command-line argument.
+---
 
-```bash
-read -rs ADMIN_PASSWORD && export ADMIN_PASSWORD && ADMIN_EMAIL=you@school.org npm run admin:create; unset ADMIN_PASSWORD
-```
-
-## Authentication testing
+## 8. Authentication: how it works and how to test it
 
 ### How it works
 
-1. `POST /api/auth/login` with `{ email, password }`. The server looks up the admin and checks the password with `bcrypt.compare`. An unknown email does the same work against a dummy hash, so both failures look identical.
-2. On success it signs a JWT (HS256) with only `sub` (admin id), `role`, `jti`, `iat`, `exp` (`JWT_EXPIRES_IN`, default 1 h), `iss` and `aud`. It sets that JWT as an **HttpOnly, SameSite=Strict** cookie (Secure and `__Host-` prefixed in production). The token is never in the response body.
-3. Every admin request sends the cookie automatically. The `authenticate` middleware verifies signature, algorithm, expiry, issuer and audience, rejects revoked tokens, and confirms the admin still exists. The role comes from the server, never from the request.
-4. State-changing requests (login, logout, status updates, or any unsafe request with the cookie) must carry an `Origin` from `FRONTEND_URL`. That is the CSRF protection, alongside SameSite=Strict.
-5. `POST /api/auth/logout` revokes the token's `jti` and clears the cookie.
+1. **Login:** `POST /api/auth/login` looks up the admin by email and checks the password with `bcrypt.compare`. An unknown email is compared against a dummy hash, so both failures take the same time and return the same `401 INVALID_CREDENTIALS`.
+2. **Token:** on success the server signs a JWT (HS256) holding only `sub` (admin id), `role`, `jti`, `iat`, `exp` (`JWT_EXPIRES_IN`), `iss` and `aud`. It sets the token as an **HttpOnly, SameSite=Strict** cookie, which in production is also **Secure** and named with the `__Host-` prefix. The token never appears in a response body, and the frontend never stores it.
+3. **Every admin request:** the `authenticate` middleware reads the cookie and checks:
+   - the signature, with the algorithm pinned so other algorithms are refused;
+   - expiry, issuer and audience;
+   - that the token hasn't been revoked by logout;
+   - that the admin still exists.
 
-| Response | Meaning |
-|----------|---------|
-| `401 INVALID_CREDENTIALS` | wrong email or password (same for both) |
-| `401 AUTH_REQUIRED` | no session cookie |
-| `401 INVALID_TOKEN` | tampered, malformed, wrong issuer/audience/algorithm, or the admin was deleted |
-| `401 TOKEN_EXPIRED` | past `exp` |
-| `401 TOKEN_REVOKED` | signed out |
-| `403 ORIGIN_NOT_ALLOWED` | state-changing request without an allowed `Origin` |
-| `403 FORBIDDEN` | signed in but lacking the required role |
-| `429 RATE_LIMITED` | more than `LOGIN_RATE_LIMIT_MAX` (default 5) failed logins per IP in 15 minutes |
+   The role comes from the server, never from the request. Failures return `401` (`AUTH_REQUIRED`, `INVALID_TOKEN`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`); a missing role returns `403 FORBIDDEN`.
+4. **CSRF:** login, logout, status changes, and any other state-changing request that carries the cookie must send an `Origin` (or `Referer`) listed in `FRONTEND_URL`, otherwise they get `403 ORIGIN_NOT_ALLOWED`. CORS rejects other origins, and request bodies must be JSON.
+5. **Logout:** `POST /api/auth/logout` revokes the token's `jti` and clears the cookie with the same attributes.
+6. **In the frontend:** the session is restored with `GET /api/auth/me`; any later `401` returns you to `/login`. Route protection in the browser is only for convenience: the API checks every admin request itself.
 
-### Try it with curl
+### Testing protected endpoints with curl
 
-Start the API (`npm run dev` in `backend/`) and create an admin first. `curl` sends no `Origin` header by default, so add the frontend origin on state-changing requests. `-c`/`-b` keep the cookie in a jar file, as a browser would.
+Run the API (section 4) and create an admin first. curl doesn't send an `Origin` header by default, so add one on state-changing requests; `-c` / `-b` keep the cookie like a browser.
 
 ```bash
 API=http://localhost:4000/api
 ORIGIN='Origin: http://localhost:5173'
-read -rs PW   # type the admin password; it is not echoed
+read -rs PW
 ```
 
 ```bash
-# 1. Protected data without a session → 401 AUTH_REQUIRED
 curl -i $API/inquiries
 ```
+→ `401 AUTH_REQUIRED`
 
 ```bash
-# 2. Wrong password, then unknown email → identical 401 INVALID_CREDENTIALS
 curl -i -H "$ORIGIN" -H 'Content-Type: application/json' -d '{"email":"you@school.org","password":"wrong-password"}' $API/auth/login
-curl -i -H "$ORIGIN" -H 'Content-Type: application/json' -d '{"email":"nobody@school.org","password":"wrong-password"}' $API/auth/login
 ```
+→ `401 INVALID_CREDENTIALS` (the same as for an unknown email)
 
 ```bash
-# 3. Valid login → 200 and Set-Cookie: edtech_admin_session=…; HttpOnly; SameSite=Strict; Max-Age=3600
 curl -i -c cookies.txt -H "$ORIGIN" -H 'Content-Type: application/json' -d "{\"email\":\"you@school.org\",\"password\":\"$PW\"}" $API/auth/login
 ```
+→ `200` and `Set-Cookie: edtech_admin_session=…; HttpOnly; SameSite=Strict`
 
 ```bash
-# 4. Use the session → 200
-curl -b cookies.txt $API/auth/me
-curl -b cookies.txt "$API/inquiries?page=1&pageSize=20"
+curl -b cookies.txt "$API/inquiries?category=Admission&search=asha"
+curl -b cookies.txt $API/inquiries/stats
+curl -b cookies.txt -o inquiries.csv "$API/inquiries/export?category=Admission"
 ```
+→ `200` each
 
 ```bash
-# 5. Inspect the claims (payload only; the signature is what the server checks)
 TOKEN=$(awk '/edtech_admin_session/ {print $7}' cookies.txt)
-node -e "console.log(JSON.parse(Buffer.from(process.argv[1].split('.')[1],'base64url')))" "$TOKEN"
-```
-
-```bash
-# 6. Tampered signature → 401 INVALID_TOKEN
 curl -i -H "Cookie: edtech_admin_session=${TOKEN%???}abc" $API/auth/me
 ```
+→ `401 INVALID_TOKEN` (tampered signature)
 
 ```bash
-# 7. State change without Origin → 403 ORIGIN_NOT_ALLOWED; with Origin → 200
 ID=$(curl -s -b cookies.txt $API/inquiries | node -e "process.stdin.on('data',d=>console.log(JSON.parse(d).data[0]?.id??''))")
-curl -i -b cookies.txt -X PATCH -H 'Content-Type: application/json' -d '{"status":"In Progress"}' $API/inquiries/$ID/status
-curl -i -b cookies.txt -X PATCH -H "$ORIGIN" -H 'Content-Type: application/json' -d '{"status":"In Progress"}' $API/inquiries/$ID/status
+curl -i -b cookies.txt -X PATCH -H 'Content-Type: application/json' -d '{"status":"Resolved"}' $API/inquiries/$ID/status
+curl -i -b cookies.txt -X PATCH -H "$ORIGIN" -H 'Content-Type: application/json' -d '{"status":"Resolved"}' $API/inquiries/$ID/status
+curl -i -b cookies.txt -X PATCH -H "$ORIGIN" -H 'Content-Type: application/json' -d '{"status":"Closed"}' $API/inquiries/$ID/status
 ```
+→ `403 ORIGIN_NOT_ALLOWED`, then `200`, then `400`
 
 ```bash
-# 8. Logout → cookie cleared; the jar no longer authenticates, and replaying the old token → 401 TOKEN_REVOKED
 curl -i -b cookies.txt -c cookies.txt -X POST -H "$ORIGIN" $API/auth/logout
-curl -i -b cookies.txt $API/auth/me
 curl -i -H "Cookie: edtech_admin_session=$TOKEN" $API/auth/me
 ```
+→ `200`, then `401 TOKEN_REVOKED` (the old token no longer works)
 
-**Expiry:** restart the API with `JWT_EXPIRES_IN=10s`, log in (step 3), save `TOKEN` (step 5), wait 11 seconds, then run `curl -i -H "Cookie: edtech_admin_session=$TOKEN" $API/auth/me`. You get `401 TOKEN_EXPIRED`. curl itself also drops the expired cookie from the jar, so `-b cookies.txt` gives `AUTH_REQUIRED`.
+- **Expiry:** start the API with `JWT_EXPIRES_IN=10s`, log in, wait 11 seconds, and replay the token with `-H "Cookie: …"`. You get `401 TOKEN_EXPIRED`.
+- **Rate limit:** the sixth wrong password from one IP within 15 minutes gets `429`.
 
-**Rate limit:** six wrong passwords in a row from one IP → the sixth gets `429` with `Retry-After`.
+Run `unset PW TOKEN` and delete `cookies.txt` and `inquiries.csv` afterwards.
 
-Run `unset PW TOKEN` and delete `cookies.txt` when you are done.
+---
 
-### Automated tests
+## 9. Tests, lint and builds
 
-`npm test` in `backend/` covers:
-- valid login, wrong password and unknown email (identical responses);
-- malformed requests, a missing cookie, invalid signatures, foreign secrets and `alg: none`;
-- expired, revoked and orphaned tokens;
-- cookie attributes, origin/CSRF checks, rate limiting and role-based 403;
-- unauthorised access to every inquiry route;
-- bcrypt hash storage (cost 12, no plaintext) and the `admin:create` script.
+| Command | What it runs |
+|---------|--------------|
+| `npm test --prefix backend` | unit, API (Supertest), schema (`schema.sql` in PGlite) and database tests (real Express + Sequelize + `pg` against an in-process PostgreSQL). No credentials needed. |
+| `TEST_DATABASE_URL='postgresql://…' DATABASE_SSL_MODE=… npm run test:integration --prefix backend` | integration tests against a real, **disposable** PostgreSQL (for example a separate Supabase test project). Skipped when `TEST_DATABASE_URL` is unset. |
+| `npm test --prefix frontend` | Vitest + Testing Library (forms, auth flow, dashboard, API client, security headers) |
+| `npm run lint --prefix backend`, `npm run lint --prefix frontend` | ESLint (including React Compiler rules) |
+| `npm run format:check --prefix backend`, `--prefix frontend` | Prettier |
+| `npm run build --prefix frontend` | production build into `frontend/dist` |
+| `npm run preview --prefix frontend` | serves the build locally with the production security headers |
 
-### Deployment note
+Latest results are recorded in [docs/REQUIREMENTS_TRACEABILITY.md](docs/REQUIREMENTS_TRACEABILITY.md).
 
-Cookie authentication works best when the browser sees the SPA and the API on **one site**. Proxy `/api/*` from Vercel to Render with a rewrite, and leave `VITE_API_BASE_URL` empty. Set `FRONTEND_URL` to the exact Vercel origin and `TRUST_PROXY=2`. Without a proxy, the cookie would be third-party and some browsers would block it. See [ARCHITECTURE.md §5.8](docs/ARCHITECTURE.md).
+---
 
-## Database TLS options
+## 10. Deployment
 
-| `DATABASE_SSL_MODE` | Behaviour |
-|---------------------|-----------|
-| `verify-full` (default) | Encrypted; certificate chain **and** hostname verified. Requires `DATABASE_SSL_CA_PATH` or `DATABASE_SSL_CA` for Supabase. |
-| `require` | Encrypted but **not verified** (vulnerable to man-in-the-middle). Explicit opt-in only; logs a warning at startup. |
-| `disable` | No TLS. Only for a local PostgreSQL; rejected when `NODE_ENV=production`. |
+### Recommended: one Render web service (`render.yaml`)
 
-On hosts where adding a file is awkward (such as Render), set `DATABASE_SSL_CA` to the certificate's PEM text, with `\n` for line breaks, instead of `DATABASE_SSL_CA_PATH`.
+The Blueprint builds the backend (runtime dependencies only) and the React app, then starts Express with `SERVE_FRONTEND=true`.
+- Pages and `/api` share one origin.
+- Client routes such as `/admin/dashboard` survive a refresh.
+- Unknown `/api/…` paths still return JSON 404s.
+- Hashed assets are cached for a year.
+- The service listens on the `PORT` that Render assigns.
 
-## Troubleshooting
+1. Prepare Supabase (section 3) and run `schema.sql`.
+2. In Render: **New → Blueprint**, then choose this repository. Render reads `render.yaml`.
+3. When prompted, enter the secret values:
+   - `DATABASE_URL`: the session-pooler URI;
+   - `DATABASE_SSL_CA`: the full PEM text of the Supabase CA certificate.
 
-| Log hint / symptom | Fix |
-|--------------------|-----|
-| `SELF_SIGNED_CERT_IN_CHAIN` | Download the Supabase CA (step 1.3) and set `DATABASE_SSL_CA_PATH` |
-| `Tenant or user not found` | The pooler user must be `postgres.<project-ref>`, and the region in the host must match the project |
-| `28P01` authentication failed | Wrong database password in `DATABASE_URL`. URL-encode special characters (`@` → `%40`) |
-| `ENETUNREACH` / `EHOSTUNREACH` | You are using the IPv6-only direct host; switch to the pooler URI |
-| Browser shows `CORS_ORIGIN_DENIED` | Add the exact frontend origin to `FRONTEND_URL` (comma-separated for several) |
-| Form says "We could not reach the server" | Start the backend on port 4000 (or `npm run dev:memory`), or set `DEV_API_PROXY_TARGET` |
-| Sign-in says "The server did not accept requests from this site" | Add the exact frontend origin (e.g. `http://localhost:5173`) to `FRONTEND_URL` |
+   Render generates `JWT_SECRET` itself, and sets `NODE_ENV=production`, `SERVE_FRONTEND=true` and `TRUST_PROXY=1`. `FRONTEND_URL` defaults to the service URL (`RENDER_EXTERNAL_URL`); set it explicitly only to add a custom domain.
+4. After the first deploy, open the service **Shell** and create an admin:
+   ```bash
+   cd backend && npm run admin:create
+   ```
+5. **Smoke test:**
+   - `https://<service>.onrender.com/api/health` returns `{"status":"ok",…}`;
+   - `/api/health/db` reports `"database":"up"`;
+   - the form at `/` submits;
+   - signing in at `/login` works;
+   - the dashboard lists the submitted inquiry.
+
+In production the cookie is `Secure`, `HttpOnly`, `SameSite=Strict` and `__Host-` prefixed (startup refuses `AUTH_COOKIE_SECURE=false`). TLS to the database is certificate-verified, and `DATABASE_URL` and `JWT_SECRET` come only from Render's environment. Render's free plan sleeps when idle, so the first request after a pause can take 30–60 seconds; the frontend allows 30 seconds per request.
+
+### Alternative: Vercel frontend + Render API
+
+`frontend/vercel.json` already sends the security headers and the SPA fallback. To use Vercel for the frontend:
+1. Deploy only the API to Render, with `SERVE_FRONTEND` unset.
+2. In `frontend/vercel.json`, add an `/api` rewrite **before** the SPA rewrite. The browser then talks only to Vercel, so the cookie stays first-party:
+   ```json
+   { "source": "/api/:path*", "destination": "https://<your-render-service>.onrender.com/api/:path*" }
+   ```
+3. On Render, set `FRONTEND_URL=https://<your-app>.vercel.app` (the CSRF origin check uses it) and `TRUST_PROXY=2` (Vercel plus Render).
+
+Calling the API cross-site without a rewrite is **not recommended**. It would need `AUTH_COOKIE_SAMESITE=none` and `VITE_API_BASE_URL`, and browsers that block third-party cookies (Safari by default) would drop the session.
+
+---
+
+## 11. Security notes
+
+- **Passwords:** bcrypt cost 12. The database CHECK rejects anything that isn't a bcrypt hash, and hashes never appear in responses, logs or exports.
+- **Tokens:** HS256 with a ≥ 32-character secret (the placeholder is refused), explicit expiry, issuer and audience, revocation on logout, and an HttpOnly cookie that JavaScript cannot read.
+- **Authorization:** every admin route sits behind `authenticate` + `requireRole('admin')`. A test walks the real routers and fails if a new route is added without them.
+- **CSRF:** SameSite=Strict, an Origin/Referer allow-list on every cookie-carrying unsafe request, JSON-only bodies, and CORS restricted to `FRONTEND_URL`.
+- **Input:** strict Zod schemas on every body, query and parameter (unknown fields rejected), a 20 kb body limit, and CHECK constraints in the database.
+- **SQL:** Sequelize queries only. LIKE wildcards in searches are escaped, and SQL injection attempts are covered by tests.
+- **Errors:** generic messages with no stack traces, SQL or connection details, in any environment.
+- **Rate limits:** failed sign-ins (5 per 15 minutes per IP) and public submissions (10 per 15 minutes per IP).
+- **CSV export:** every field is quoted, and values starting with `= + - @` (or a tab or carriage return) get a leading `'`, so spreadsheets treat them as text rather than formulas. This includes phone numbers such as `'+91…`; the quote is hidden in Excel, LibreOffice and Google Sheets.
+- **Headers:**
+  - API: Helmet with `default-src 'none'`.
+  - Pages: CSP `default-src 'self'` with no inline or eval scripts, plus HSTS, `X-Frame-Options: DENY`, COOP, `nosniff` and a strict referrer policy.
+- **Database:** TLS with certificate verification; RLS blocks Supabase's public REST access; `sync()` is never called.
+- **Secrets:** environment variables only. `.gitignore` excludes every `.env*` file except the examples, plus private keys, dependencies, build output, coverage and logs.
+
+---
+
+## 12. Known limitations
+
+- **Not verified on Supabase or live hosting:** tests and local runs use PostgreSQL through PGlite. A real Supabase connection and a live deployment still need your credentials and accounts.
+- **Single instance:** logout revocation and rate limits are kept in memory. After a restart, a logged-out token works again until it expires (at most `JWT_EXPIRES_IN`). Running several instances would need a shared store.
+- **One role:** there is a single admin role, so admin management (password change, deletion) is done through the scripts or the database.
+- **Summary totals are unfiltered:** the summary cards and chart always cover all inquiries; only the table follows the filters.
+- **Export cap:** CSV export stops at 5000 rows; narrow the filters for larger exports.
+- **No CI pipeline** is configured.
+
+---
+
+## 13. Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `SELF_SIGNED_CERT_IN_CHAIN` at startup | supply the Supabase CA (`DATABASE_SSL_CA_PATH` or `DATABASE_SSL_CA`) |
+| `Tenant or user not found` | the pooler user must be `postgres.<project-ref>`, and the region in the host must match |
+| `28P01` authentication failed | wrong database password; URL-encode special characters (`@` → `%40`) |
+| `ENETUNREACH` / `EHOSTUNREACH` | you used the IPv6-only direct host; use the pooler URI |
+| Startup lists invalid configuration | fix the listed variables (see `.env.example`) |
+| Sign-in fails with "The server did not accept requests from this site" | add the exact browser origin to `FRONTEND_URL` |
+| "We could not reach the server" in the form | start the backend (or `npm run dev:memory --prefix backend`) |
+| `SERVE_FRONTEND: no index.html` | run `npm run build --prefix frontend` first |
+
+---
 
 ## License
 

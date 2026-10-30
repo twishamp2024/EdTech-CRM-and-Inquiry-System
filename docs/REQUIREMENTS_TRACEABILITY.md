@@ -1,7 +1,7 @@
 # Requirements Traceability Matrix
 
 Every mandatory requirement, the files that implement (or will implement) it, and how it is verified.
-Last updated: **2026-10-30, end of stage 6** (admin dashboard: listing, filters, search, pagination, status management). Status is only `Verified` when the named check was actually executed.
+Last updated: **2026-10-30, final submission preparation (stage 9)**.
 Phase numbers refer to [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Paths are relative to the repository root.
 
 **Status legend:** `Planned` → `Implemented` → `Verified` (verification actually executed). `Blocked (Bx)` = waiting on a blocker from the implementation plan.
@@ -53,11 +53,11 @@ Phase numbers refer to [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Paths a
 
 | ID | Requirement | Planned implementation | Verification | Phase | Status |
 |----|-------------|------------------------|--------------|-------|--------|
-| R-01 | GitHub repository with `frontend/` and `backend/` | Repo layout per ARCHITECTURE §2; `gh repo create` + push | REV: tree contains both dirs · MAN: repo URL opens | 1, 8 | Partial — repo exists at github.com/twishamp2024/EdTech-CRM-and-Inquiry-System with `frontend/` and `backend/` locally; stage 2 not yet committed/pushed |
+| R-01 | GitHub repository with `frontend/` and `backend/` | Repo layout per ARCHITECTURE §2; `gh repo create` + push | REV: tree contains both dirs · MAN: repo URL opens | 1, 8 | **Verified**: github.com/twishamp2024/EdTech-CRM-and-Inquiry-System, `frontend/` and `backend/` present, `main` in sync with `origin/main` at `81a6d16` |
 | R-02 | `schema.sql` | `schema.sql` (root) | IT: `npm run db:migrate` applies cleanly twice · MAN: paste into Supabase SQL editor | 1 | Verified (SCH: applied twice, constraints, defaults, trigger, RLS; `db:migrate` + `db:check` over the Postgres wire protocol against PGlite). Not yet applied to Supabase (B1) |
 | R-03 | `.env.example` | `.env.example` (root, backend variables — copy to `backend/.env`), `frontend/.env.example` | REV: every variable read by `config/env.js` / `config.js` appears; no real values · UT: env schema test iterates the example's keys | 1, 2, 5 | Verified — root `.env.example` (backend) + `frontend/.env.example`; UT asserts required keys and that placeholders are refused |
-| R-04 | `README.md` with setup and authentication-testing instructions | `README.md` | MAN: follow README from clean clone; auth-testing section covers login, token use, missing/invalid/expired token | 8 | Partial — setup, Supabase/TLS, scripts and testing documented; auth-testing guide comes with Phase 3 |
-| R-05 | Deployment-ready application | `render.yaml`; `frontend/vercel.json`; `engines` / `.nvmrc`; `server.js` honours `PORT`, graceful shutdown; `/api/health`; env-driven CORS | CI: lint, tests, `vite build` pass · MAN: `NODE_ENV=production npm start` locally · MAN: deployed smoke test | 2, 7, 8 | Partial — `PORT`, graceful shutdown, health endpoints, env-driven CORS, `vercel.json`, engines/.nvmrc done and smoke-tested locally; `render.yaml` + live deploy pending (B1, B4) |
+| R-04 | `README.md` with setup and authentication-testing instructions | `README.md` | MAN: follow README from clean clone; auth-testing section covers login, token use, missing/invalid/expired token | 8 | **Verified**: complete README; all 23 `npm run` commands, file links and anchors checked mechanically against the package scripts |
+| R-05 | Deployment-ready application | `render.yaml`; `frontend/vercel.json`; `engines` / `.nvmrc`; `server.js` honours `PORT`, graceful shutdown; `/api/health`; env-driven CORS | CI: lint, tests, `vite build` pass · MAN: `NODE_ENV=production npm start` locally · MAN: deployed smoke test | 2, 7, 8 | **Deployment-ready, not deployed**: `render.yaml` (single same-origin service). The exact build command was run from a clean copy, then started on a platform-style `PORT`, with SPA routes, assets, health, API 404s, auth and data checked. Live deploy needs your Render account (B4) |
 
 ## 5. Technology stack constraints
 
@@ -66,11 +66,11 @@ Phase numbers refer to [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Paths a
 | T-01 | React + Vite + JavaScript | `frontend/` scaffold, `.jsx` files only, no TypeScript | REV: `package.json`, no `tsconfig.json` · CI: `vite build` | 5 | Verified — Vite 8 + React 19, `.jsx` only; `npm run build` passes |
 | T-02 | Node.js + Express | `backend/src/app.js`, `server.js` | REV · API tests | 2 | Verified — Express 5 app; API tests + local boot |
 | T-03 | Sequelize ORM | `backend/src/config/database.js`; `backend/src/models/*` | REV · IT | 2 | Verified — Sequelize 6 models; UT field mappings; db:check compares models with live tables |
-| T-04 | Supabase PostgreSQL via connection string | `DATABASE_URL` in `config/env.js` / `database.js`; pooler guidance in README | IT against Supabase · MAN: `/api/health/db` → `200` | 2 | Partial — `DATABASE_URL` parsing, pooler + TLS verify-full done; TLS rejection verified against the real Supabase pooler; real connection blocked (B1) |
+| T-04 | Supabase PostgreSQL via connection string | `DATABASE_URL` in `config/env.js` / `database.js`; pooler guidance in README | IT against Supabase · MAN: `/api/health/db` → `200` | 2 | Partial: verified against PostgreSQL (PGlite, isolated); **a Supabase connection is not verified** (B1: no credentials) |
 | T-05 | `pg` driver | `backend/package.json` (`pg`, `pg-hstore`); `dialectModule` set explicitly | REV | 2 | Verified — `pg` passed as `dialectModule` (UT) |
-| T-06 | `bcrypt` and `jsonwebtoken` | `backend/package.json`; `utils/password.js`; `utils/jwt.js` | REV · UT | 3 | Partial — installed; bcrypt prebuilt binary verified; usage in Phase 3 |
-| T-07 | Zod validation | `backend/src/validators/*`; `middleware/validate.js`; `config/env.js`; `frontend/src/validation/*` | UT · API | 2–5 | Partial — Zod used for env config and `validate` middleware (UT); request schemas planned |
-| T-08 | Render/Vercel-compatible architecture | `render.yaml`; `frontend/vercel.json`; independent package roots | REV · MAN deploy | 8 | Blocked (B4) for live deploy |
+| T-06 | `bcrypt` and `jsonwebtoken` | `backend/package.json`; `utils/password.js`; `utils/jwt.js` | REV · UT | 3 | **Verified**: bcrypt cost 12 hashing and comparison; jsonwebtoken HS256 sign/verify (A-02 to A-05) |
+| T-07 | Zod validation | `backend/src/validators/*`; `middleware/validate.js`; `config/env.js`; `frontend/src/validation/*` | UT · API | 2–5 | **Verified**: Zod for env config, every request body/query/param, and both frontend forms |
+| T-08 | Render/Vercel-compatible architecture | `render.yaml`; `frontend/vercel.json`; independent package roots | REV · MAN deploy | 8 | **Ready**: `render.yaml` (recommended) and `vercel.json` (alternative, needs the Render URL rewrite). Not deployed (B4) |
 
 ## 6. Prohibitions and engineering rules
 
@@ -80,10 +80,10 @@ Phase numbers refer to [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Paths a
 | P-02 | No Supabase Auth | Custom auth (A-01) | REV · CI grep for `@supabase/` | Verified 2026-10-30 — no `@supabase/` package in either lockfile |
 | P-03 | No direct DB connections from frontend | Frontend only knows `VITE_API_BASE_URL`; RLS blocks anon REST access | REV: no DB/Supabase deps or env vars in `frontend/` · MAN: anon REST call returns nothing | Verified 2026-10-30 — no DB/Supabase deps or variables in `frontend/`; RLS enabled (SCH) |
 | P-04 | Never hardcode or commit secrets | Env-only config; `.gitignore`; placeholder-only examples | Phase 7.7 secret scan before each commit · CI grep | Verified 2026-10-30 — secret-pattern scan clean; only `.env.example` files present; config never logs credentials (UT) |
-| P-05 | No mandatory feature left as TODO | — | `git grep -n TODO` reviewed before completion | Ongoing — no TODOs in code |
-| P-06 | Don't claim tests passed unless executed | Test results recorded with real output; skipped suites reported as skipped | Status column updated only from executed runs | Ongoing |
-| P-07 | No publish/deploy/external credentials without authorisation | B3/B4 require explicit approval | — | Ongoing |
-| P-08 | Modular, maintainable code | Layered backend (routes → controllers → services → models), component-based frontend | REV · ESLint in CI | Ongoing — layered backend; ESLint clean in both packages |
+| P-05 | No mandatory feature left as TODO | — | `git grep -n TODO` reviewed before completion | **Verified**: no TODO/FIXME in code (audit grep) |
+| P-06 | Don't claim tests passed unless executed | Test results recorded with real output; skipped suites reported as skipped | Status column updated only from executed runs | **Verified**: every result in this document comes from an executed run; skipped suites are reported as skipped |
+| P-07 | No publish/deploy/external credentials without authorisation | B3/B4 require explicit approval | — | **Verified**: nothing deployed or published; no external credentials used |
+| P-08 | Modular, maintainable code | Layered backend (routes → controllers → services → models), component-based frontend | REV · ESLint in CI | **Verified**: layered backend, component-based frontend; ESLint and Prettier clean |
 
 ## 7. Stage 2 — foundation & database requirements
 
@@ -331,3 +331,106 @@ Backend at the end of stage 5: 351 passed, 5 skipped (integration, no `TEST_DATA
 | EN-04 | Usability | sortable Date (existing); counts "x–y of n matching (N in total)"; active-filter chips with per-filter remove and Clear all; sticky Name column under 1000 px; stats refresh after a status change; labelled, keyboard-operable controls | FE chips (3), counts (2), stats refresh (1); E2E | Verified |
 
 Test totals (2026-10-30): backend **486 tests: 481 passed, 5 skipped** (integration, needs `TEST_DATABASE_URL`); frontend **112 passed**; lint and build pass in both packages.
+
+## 13. Stage 8: security, integration and regression audit (2026-10-30)
+
+### Mandatory requirements (checked against the code and executed tests)
+
+| Requirement | Result | Evidence |
+|-------------|--------|----------|
+| React frontend and Express backend | Pass | `frontend/` (React 19 + Vite 8), `backend/` (Express 5); both build and test |
+| Supabase PostgreSQL as production provider | **Partial** | `pg` + Sequelize through `DATABASE_URL` (Supabase pooler, TLS verify-full); verified on PostgreSQL (PGlite), **not on Supabase** (B1) |
+| Sequelize for database operations | Pass | all reads and writes via models / `sequelize.query` for advisory lock and migrate; no `sync()` |
+| Public form has every required field | Pass | FE InquiryPage tests; browser |
+| All user types and categories | Pass | constants = DB CHECKs (SCH test reads them back) = frontend (parity test) |
+| Valid submissions persist | Pass | DB persistence tests; integration suite (on PGlite); browser |
+| Custom bcrypt/JWT authentication | Pass | sections 2, 9 |
+| Supabase Auth not used | Pass | no `@supabase/` package in either lockfile; no Supabase SDK imports |
+| Admin routes protected | Pass | route-walking guard test (new) + API/DB tests |
+| Seven table columns | Pass | FE header-order test |
+| Category and user-type filters | Pass | DB, UT, FE, browser |
+| Name and phone search | Pass | DB, UT, FE, browser |
+| Combined filters | Pass | DB, UT, FE, browser |
+| `schema.sql`, `.env.example`, `README.md` complete | Pass | schema applied in tests and integration; every env var read by the backend is documented (audit diff); README sections listed in R-04 |
+
+### Security checks
+
+| Area | Finding | Action |
+|------|---------|--------|
+| Plaintext passwords | none: bcrypt only; DB CHECK forbids non-bcrypt values | — |
+| Hardcoded secrets / sensitive files in Git | none in 147 tracked files or in history (no `.env` ever committed); test credentials only in test helpers | — |
+| JWT verification / expiry | HS256 pinned, signature, `exp`, `iss`, `aud`, claim shape, revocation, admin existence | — |
+| Backend authorisation | every admin route behind `authenticate` + `requireRole` | **added** `routeProtection.test.js` (mutation-checked: moving a route above auth fails 3 tests) |
+| CORS | allow-list, credentials only for allowed origins; foreign Origin → 403 (probe) | — |
+| Input validation | strict Zod everywhere; `__proto__`/`constructor` keys, arrays, operator objects rejected (probes) | — |
+| SQL injection | Sequelize escaping; LIKE wildcards escaped; injection strings return nothing (DB tests) | — |
+| Unsafe error messages | generic 5xx bodies, no stacks/SQL in any environment (probes, tests) | — |
+| Rate limits | login (failures) and public submissions; **found**: behind a proxy with `TRUST_PROXY=0` all clients share one bucket | **added** production startup warning + test |
+| Cookies | HttpOnly, SameSite=Strict, Secure + `__Host-` in production | — |
+| CSRF | Origin/Referer allow-list on every cookie-carrying unsafe request; `text/plain` and `Origin: null` rejected (probes) | — |
+| Request size | 20 kb JSON limit → 413 | — |
+| Unauthorised status changes | 401 without session, 403 without trusted origin, row unchanged (DB tests) | — |
+| Exposure of admin credentials / hashes | never in responses, exports, logs or CSV (tests) | — |
+| Frontend headers | **found**: no Content-Security-Policy or HSTS on the SPA (the page holding the admin session) | **added** CSP, HSTS, COOP to `vercel.json`, mirrored in `vite preview`; verified in a browser (login, dashboard, chart, status update, public form) with zero CSP violations; `securityHeaders.test.js` |
+| Dependencies | `npm audit`: 0 vulnerabilities (both packages) | — |
+| Low-risk notes (not changed) | `GET /api/health/db` is public and unthrottled (one `SELECT 1`); revocation list and rate limits are in-memory (single instance); `.claude/launch.json` (dev-server commands only) is committed | documented |
+
+### Database checks
+
+Model ↔ `schema.sql` mappings (SCH test + `db:check` + integration); CHECK constraints for categories, user types and statuses; unique admin email (normalised to lower case); timestamps (`updated_at` trigger, equal timestamps on insert); no schema changes at startup (no `sync`); every variable documented; database errors mapped to generic 503/500. **No production database was touched** (none is configured).
+
+### Test runs (this audit)
+
+| Suite | Result |
+|-------|--------|
+| Backend (`npm test`) | **499 tests: 494 passed, 5 skipped** (integration without `TEST_DATABASE_URL`), 0 failed; lint and format pass; `npm audit` 0 |
+| Backend integration (`tests/integration`) against an isolated PGlite PostgreSQL server | **5 / 5 passed** |
+| Backend integration against **Supabase** | **not run**: no credentials (B1) |
+| Frontend (`npm test`), lint, build | **116 passed**; lint and format pass; build passes with no warnings; `npm audit` 0 |
+| API probe script (22 attacker-style requests) | 22 behaved as intended (1 probe expectation was wrong: a UTF-16 body is rejected with 400 rather than 415, still rejected) |
+| Browser, production build + production headers | login, dashboard, chart, status update, public form; 0 CSP violations |
+
+## 14. Final acceptance checklist (2026-10-30)
+
+| # | Requirement | Status | Evidence |
+|---|-------------|--------|----------|
+| 1 | Public form with User Type, Category, Name, Email, Phone, Message | ✅ Verified | F-01–F-08, UI-01–UI-07 |
+| 2 | Saved to Supabase PostgreSQL | ✅ Verified on PostgreSQL (PGlite) · ⚠️ **Supabase not run** (needs credentials) | F-07, T-04, integration 5/5 on PGlite |
+| 3 | Custom bcrypt + JWT auth, no Supabase Auth | ✅ Verified | A-01–A-09, AU-01–AU-18 |
+| 4 | Dashboard and every inquiry API protected | ✅ Verified | A-06, A-07, DB-16, route-protection guard |
+| 5 | Seven columns, Category and User Type filters, name/phone search, combined | ✅ Verified | D-01–D-05, DB-01–DB-17 |
+| 6 | GitHub repo with `frontend/` and `backend/` | ✅ Verified | R-01 |
+| 7 | `schema.sql` | ✅ Verified | R-02, S-12–S-17 |
+| 8 | `.env.example` (placeholders only) | ✅ Verified | R-03; every backend variable documented |
+| 9 | README with setup and auth-testing instructions | ✅ Verified | R-04 |
+| 10 | Deployment-ready | ✅ Ready, ⚠️ **not deployed** | R-05, `render.yaml`, Render-like run from a clean copy |
+| 11 | Stack: React + Vite + JS, Express, Sequelize, `pg`, bcrypt, jsonwebtoken, Zod | ✅ Verified | T-01–T-07 |
+| 12 | No SQLite, no Supabase Auth, no frontend database access, no committed secrets | ✅ Verified | P-01–P-04 |
+
+### Deployment readiness checks (stage 9)
+
+| Check | Result |
+|-------|--------|
+| Frontend production build | pass |
+| Production API routing (`/api/*` → Express) | pass: same-origin tests and Render-like run |
+| React Router routes survive refresh (`/login`, `/admin/dashboard`) | pass: 200 HTML shell |
+| API routes not swallowed by the SPA fallback | pass: `/api`, `/api/nope` → JSON 404 (mutation-checked) |
+| Missing assets don't return HTML | pass: JSON 404 |
+| Health endpoint | pass: `/api/health` 200, `/api/health/db` 200 |
+| Honors the platform port | pass: started on `PORT=10000` |
+| Secure cookies in production | pass: `__Host-`, Secure, HttpOnly, SameSite=Strict (test) |
+| Database URL and JWT secret from host environment | pass: `render.yaml` uses `sync: false` and `generateValue`; nothing in Git |
+| No dev tools at runtime | pass: backend installed with `--omit=dev`, then started and served traffic |
+| `.gitignore` | `.env*` (except examples), `*.key`, `node_modules/`, `dist/`, `build/`, `coverage/`, `*.log` all verified with `git check-ignore` |
+
+### Final test run (2026-10-30, stage 9)
+
+| Suite | Result |
+|-------|--------|
+| Backend `npm test` | **520 tests: 515 passed, 5 skipped** (integration without `TEST_DATABASE_URL`), 0 failed |
+| Backend `tests/integration` on an isolated PGlite PostgreSQL | **5 / 5 passed** |
+| Backend `tests/integration` on **Supabase** | **not run**: no credentials |
+| Frontend `npm test` | **116 passed** |
+| Lint and Prettier (both packages) | pass |
+| Frontend production build | pass, no warnings |
+| `npm audit` (both packages) | 0 vulnerabilities |

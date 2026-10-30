@@ -5,6 +5,7 @@ import { createAuthenticate } from './middleware/authenticate.js';
 import { createCorsMiddleware } from './middleware/cors.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
+import { createFrontendMiddleware } from './frontend/serveFrontend.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import {
   createRequireTrustedOrigin,
@@ -56,6 +57,16 @@ export function createApp({ config, logger, checkDatabase, services }) {
   };
 
   app.use('/api', createApiRouter({ config, logger, checkDatabase, services, security }));
+
+  // Same-origin deployment: serve the built React app for every non-API path.
+  if (config.frontend?.serve) {
+    app.use(
+      createFrontendMiddleware({
+        distDir: config.frontend.distDir,
+        isProduction: config.isProduction,
+      }),
+    );
+  }
 
   app.use(notFound);
   app.use(errorHandler({ logger }));
